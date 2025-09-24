@@ -1,0 +1,230 @@
+module alu #(
+    parameter INST_W = 4,
+    parameter INT_W  = 6,
+    parameter FRAC_W = 10,
+    parameter DATA_W = INT_W + FRAC_W
+)(
+    input                      i_clk,
+    input                      i_rst_n,
+    input                      i_in_valid,
+    output                     o_busy,
+    input         [INST_W-1:0] i_inst,
+    input  signed [DATA_W-1:0] i_data_a,
+    input  signed [DATA_W-1:0] i_data_b,
+    output                     o_out_valid,
+    output        [DATA_W-1:0] o_data
+);
+
+    // State machine states
+    localparam IDLE = 1'b0;
+    localparam BUSY = 1'b1;
+    
+    // Saturation values for 16-bit signed numbers
+    localparam signed [DATA_W-1:0] MAX_VALUE = 16'h7FFF; // 0111_1111_1111_1111
+    localparam signed [DATA_W-1:0] MIN_VALUE = 16'h8000; // 1000_0000_0000_0000
+    
+    // 36-bit accumulator parameters (16-bit int + 20-bit fraction)
+    localparam ACC_W = 36;
+    localparam ACC_INT_W = 16;
+    localparam ACC_FRAC_W = 20;
+    localparam signed [ACC_W-1:0] ACC_MAX_VALUE = 36'h7_FFFF_FFFF; // 2^35 - 1
+    localparam signed [ACC_W-1:0] ACC_MIN_VALUE = 36'h8_0000_0000; // -2^35
+    
+    // Internal registers
+    reg state, next_state;
+    reg [DATA_W-1:0] result_reg;
+    reg out_valid_reg;
+    reg signed [ACC_W-1:0] accumulator;  // 36-bit accumulator
+    
+    // Temporary variables for overflow detection and operations
+    reg signed [DATA_W:0] temp_result;    // 17-bit for overflow detection
+    reg signed [31:0] mult_result;        // 32-bit multiplication result
+    reg signed [ACC_W-1:0] mult_extended;  // 36-bit sign-extended multiplication result
+    reg signed [ACC_W:0] acc_sum;         // 37-bit for accumulator overflow detection
+    reg signed [25:0] rounded_result;     // 26-bit for rounding operation
+    
+    
+        
+    // Output assignments
+    assign o_busy = (state == BUSY);
+    assign o_out_valid = out_valid_reg;
+    assign o_data = result_reg;
+    
+    // Next state logic
+    always @(*) begin
+        case (state)
+            IDLE: begin
+                if (i_in_valid) begin
+                    next_state = BUSY;
+                end else begin
+                    next_state = IDLE;
+                end
+            end
+            BUSY: begin
+                next_state = IDLE;  // Single cycle operation
+            end
+            default: next_state = IDLE;
+        endcase
+    end
+    
+    // ALU operation and output register
+    always @(posedge i_clk or negedge i_rst_n) begin
+        if (!i_rst_n) begin
+            result_reg <= {DATA_W{1'b0}};
+            out_valid_reg <= 1'b0;
+            accumulator <= {ACC_W{1'b0}};  // Initialize accumulator to 0
+            $display("accumulator initial value: %d", accumulator);
+        end else begin
+            if (state == IDLE && i_in_valid) begin
+                // Perform ALU operation based on instruction
+                case (i_inst)
+                    4'b0000: begin  // Addition for fixed-point numbers with saturation
+                        temp_result = $signed(i_data_a) + $signed(i_data_b);
+                        if (temp_result > $signed(MAX_VALUE)) begin
+                            result_reg <= MAX_VALUE;
+                        end else if (temp_result < $signed(MIN_VALUE)) begin
+                            result_reg <= MIN_VALUE;
+                        end else begin
+                            result_reg <= temp_result[DATA_W-1:0];
+                        end
+                    end
+                    4'b0001: begin  // Subtraction for fixed-point numbers with saturation
+                        temp_result = $signed(i_data_a) - $signed(i_data_b);
+                        if (temp_result > $signed(MAX_VALUE)) begin
+                            result_reg <= MAX_VALUE;
+                        end else if (temp_result < $signed(MIN_VALUE)) begin
+                            result_reg <= MIN_VALUE;
+                        end else begin
+                            result_reg <= temp_result[DATA_W-1:0];
+                        end
+                    end
+                    4'b0010: begin  // Multiplication and accumulation for fixed-point numbers
+                        // Calculate multiplication result from data_a * data_b
+                        mult_result = $signed(i_data_a) * $signed(i_data_b);
+                        //$display("mult_result: %d", mult_result);
+
+                        // Extend multiplication result to 36 bits
+                        mult_extended = {{4{mult_result[31]}}, mult_result};
+                        //$display("mult_extended: %d", mult_extended);
+
+                        // Add the accumulator to the mult_result  
+                        acc_sum = $signed(accumulator) + $signed(mult_extended);
+                        
+                        // PATH 1: Saturate and update the 36-bit accumulator
+                        if (acc_sum > $signed(ACC_MAX_VALUE)) begin
+                            accumulator <= ACC_MAX_VALUE;
+                        end else if (acc_sum < $signed(ACC_MIN_VALUE)) begin
+                            accumulator <= ACC_MIN_VALUE;
+                        end else begin
+                            accumulator <= acc_sum[ACC_W-1:0];
+                        end
+                        
+                        // PATH 2: Round first, then saturate for 16-bit output
+                        // Round to nearest representable number with 10-bit fraction
+                        // Tie-breaking: round half toward positive infinity
+                        // Check bits [9:0] for rounding decision
+                        if (acc_sum[9:0] >= 10'd512) begin
+                            // Round up (toward positive infinity for ties)
+                            rounded_result = acc_sum[35:10] + 1'b1;
+                        end else begin
+                            // Round down (truncate)
+                            rounded_result = acc_sum[35:10];
+                        end
+
+                        // Saturate rounded result to 16-bit output range
+                        if (rounded_result > $signed(MAX_VALUE)) begin
+                            result_reg <= MAX_VALUE;
+                        end else if (rounded_result < $signed(MIN_VALUE)) begin
+                            result_reg <= MIN_VALUE;
+                        end else begin
+                            result_reg <= rounded_result[15:0];
+                        end
+                    end
+                    4'b0011: begin  // Taylor expansion of sin function on fixed-point numbers
+                        // calculate the Taylor expansion of sin function on fixed-point numbers
+                        // sin(x) = x - 1/6*x^3 + 1/120*x^5 (n = 2)
+                        localparam [15:0] coeff_6 = 16'b0000000010101011;   // 1/6 in Q6.10 = 171/1024 ≈ 0.1670
+                        localparam [15:0] coeff_120 = 16'b0000000000001001; // 1/120 in Q6.10 = 9/1024 ≈ 0.0088
+
+                        reg signed [31:0] x_squared;      // x^2 in Q12.20
+                        reg signed [47:0] x_cubed;        // x^3 in Q18.30
+                        reg signed [63:0] x_fifth;        // x^5 in Q30.50  
+                        reg signed [63:0] term2_full;     // (1/6)*x^3 in Q24.40
+                        reg signed [79:0] term3_full;     // (1/120)*x^5 in Q36.60
+                        reg signed [31:0] x_extended;     // x in Q12.20 for high precision calc
+                        reg signed [31:0] term2_q1220;    // (1/6)*x^3 in Q12.20
+                        reg signed [31:0] term3_q1220;    // (1/120)*x^5 in Q12.20
+                        reg signed [32:0] sin_high_prec;  // High precision result in Q12.20
+                        reg signed [25:0] rounded_result; // Rounded result before saturation
+                        reg signed [16:0] sin_result;     // Final result with overflow detection
+
+                        // Extend x to higher precision (Q12.20)
+                        x_extended = $signed(i_data_a) << 10;  // Convert Q6.10 to Q12.20
+                        
+                        // Calculate x^2 in Q12.20
+                        x_squared = $signed(i_data_a) * $signed(i_data_a);  // Q6.10 * Q6.10 = Q12.20
+ 
+                        // Calculate x^3 in Q18.30
+                        x_cubed = $signed(i_data_a) * x_squared;  // Q6.10 * Q12.20 = Q18.30
+                        
+                        // Calculate x^5 in Q30.50
+                        x_fifth = x_squared * x_cubed;  // Q12.20 * Q18.30 = Q30.50
+                        
+                        // Calculate (1/6)*x^3 in Q24.40
+                        term2_full = $signed(coeff_6) * x_cubed;  // Q6.10 * Q18.30 = Q24.40
+                        term2_q1220 = term2_full >>> 20;  // Convert Q24.40 to Q12.20
+                        
+                        // Calculate (1/120)*x^5 in Q36.60
+                        term3_full = $signed(coeff_120) * x_fifth;  // Q6.10 * Q30.50 = Q36.60
+                        term3_q1220 = term3_full >>> 40;  // Convert Q36.60 to Q12.20
+                        
+                        // High precision calculation in Q12.20
+                        // sin(x) = x - (1/6)*x^3 + (1/120)*x^5
+                        sin_high_prec = x_extended - term2_q1220 + term3_q1220;
+                        
+                        // Rounding from Q12.20 to Q6.10
+                        // Check bits [9:0] for rounding decision (tie-breaking: round half up)
+                        if (sin_high_prec[9:0] >= 10'd512) begin
+                            // Round up
+                            rounded_result = sin_high_prec[31:10] + 1'b1;
+                        end else begin
+                            // Round down (truncate)
+                            rounded_result = sin_high_prec[31:10];
+                        end
+                        
+                        // Convert to 17-bit for saturation check
+                        sin_result = rounded_result[16:0];
+                        
+                        // Saturation check
+                        if (sin_result > $signed(MAX_VALUE)) begin
+                            result_reg <= MAX_VALUE;
+                        end else if (sin_result < $signed(MIN_VALUE)) begin
+                            result_reg <= MIN_VALUE;
+                        end else begin
+                            result_reg <= sin_result[15:0];
+                        end
+                    end
+                    default: begin
+                        result_reg <= {DATA_W{1'b0}};  // Default to zero for unsupported instructions
+                    end
+                endcase
+                out_valid_reg <= 1'b1;
+            end else begin
+                out_valid_reg <= 1'b0;
+            end
+        end
+    end
+
+    // State machine
+    always @(posedge i_clk or negedge i_rst_n) begin
+        if (!i_rst_n) begin
+            state <= IDLE;
+        end else begin
+            state <= next_state;
+        end
+    end
+
+
+
+    
+endmodule
