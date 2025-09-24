@@ -204,9 +204,6 @@ module alu #(
                             result_reg <= sin_result[15:0];
                         end
                     end
-                    default: begin
-                        result_reg <= {DATA_W{1'b0}};  // Default to zero for unsupported instructions
-                    end
                     4'b0100: begin // Binary to gray code 
                         // calculate the gray code of the binary input
                         // gray code = (binary >> 1) ^ binary
@@ -238,33 +235,43 @@ module alu #(
                         result_reg <= temp_data;
                     end
                     4'b0110: begin // right rotate
-                    reg [2*DATA_W-1:0] temp_data; // 32-bit temp data
-                    temp_data = {i_data_a, i_data_a};
-                    // data_b is shift amount between 0 and 16(inclusive)
-                    temp_data = temp_data >> i_data_b;
-                    result_reg <= temp_data[DATA_W-1:0];
+                        reg [2*DATA_W-1:0] temp_data; // 32-bit temp data
+                        temp_data = {i_data_a, i_data_a};
+                        // data_b is shift amount between 0 and 16(inclusive)
+                        temp_data = temp_data >> i_data_b;
+                        result_reg <= temp_data[DATA_W-1:0];
                     end
-                    4'b0111: begin // Count leading zeros
+                    4'b0111: begin // Count leading MSB zeros
                         // count leading zeros of data_a
-                        integer cpop;
-                        cpop = 0;
-                        for (int i = 0; i < DATA_W; i = i + 1) begin
-                            if (i_data_a[i] == 1'b1) begin
-                                cpop = cpop + 1;
+                        reg [15:0] cnt;
+                        cnt = 0;
+                        for (int i = 15; i >= 0; i = i - 1) begin
+                            if (i_data_a[15-i] == 1'b0) begin
+                                cnt = cnt + 1;
+                            end else begin
+                                break;
                             end
                         end
-                        result_reg <= cpop;
+                        result_reg <= cnt;
                     end
                     4'b1000: begin // Reverse Match4 (Custom bit level operation)
-                        // reverse match4 of data_a
-                        // reverse match4 = (data_a >> 1) & (data_a >> 2) & (data_a >> 3) & (data_a >> 4)
-                        result_reg <= (i_data_a >> 1) & (i_data_a >> 2) & (i_data_a >> 3) & (i_data_a >> 4);
+                        reg [15:0] temp_data;
+                        // for bit 13~15: 0
+                        temp_data[15:13] = 0;
+                        // for bit 0~12: o_data[i] = i_data_a[i+3:i] == i_data_b[15-i:12-i]
+                        for (int i = 0; i < 13; i = i + 1) begin
+                            temp_data[i] = i_data_a[i+3:i] == i_data_b[15-i:12-i];
+                        end
+                        result_reg <= temp_data;
                     end
                     4'b1001: begin // Transpose an 8*8 matrix
                         // transpose an 8*8 matrix
                         // matrix is 8*8 unsigned integer
                         // transpose the matrix
                         result_reg <= (i_data_a >> 1) & (i_data_a >> 2) & (i_data_a >> 3) & (i_data_a >> 4);
+                    end
+                    default: begin
+                        result_reg <= {DATA_W{1'b0}};  // Default to zero for unsupported instructions
                     end
                 endcase
                 out_valid_reg <= 1'b1;
