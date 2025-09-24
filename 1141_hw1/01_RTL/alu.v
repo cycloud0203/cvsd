@@ -242,12 +242,12 @@ module alu #(
                         result_reg <= temp_data[DATA_W-1:0];
                     end
                     4'b0111: begin // Count leading MSB zeros
-                        // count leading zeros of data_a
+                        // count leading zeros of data_a from MSB
                         reg [15:0] cnt;
-                        cnt = 0;
+                        cnt = 16'd0;
                         for (int i = 15; i >= 0; i = i - 1) begin
-                            if (i_data_a[15-i] == 1'b0) begin
-                                cnt = cnt + 1;
+                            if (i_data_a[i] == 1'b0) begin
+                                cnt = cnt + 16'd1;
                             end else begin
                                 break;
                             end
@@ -257,11 +257,21 @@ module alu #(
                     4'b1000: begin // Reverse Match4 (Custom bit level operation)
                         reg [15:0] temp_data;
                         // for bit 13~15: 0
-                        temp_data[15:13] = 0;
-                        // for bit 0~12: o_data[i] = i_data_a[i+3:i] == i_data_b[15-i:12-i]
-                        for (int i = 0; i < 13; i = i + 1) begin
-                            temp_data[i] = i_data_a[i+3:i] == i_data_b[15-i:12-i];
-                        end
+                        temp_data[15:13] = 3'b000;
+                        // Explicit comparisons to avoid synthesis issues with variable indices
+                        temp_data[0]  = (i_data_a[3:0]   == i_data_b[15:12]);
+                        temp_data[1]  = (i_data_a[4:1]   == i_data_b[14:11]);
+                        temp_data[2]  = (i_data_a[5:2]   == i_data_b[13:10]);
+                        temp_data[3]  = (i_data_a[6:3]   == i_data_b[12:9]);
+                        temp_data[4]  = (i_data_a[7:4]   == i_data_b[11:8]);
+                        temp_data[5]  = (i_data_a[8:5]   == i_data_b[10:7]);
+                        temp_data[6]  = (i_data_a[9:6]   == i_data_b[9:6]);
+                        temp_data[7]  = (i_data_a[10:7]  == i_data_b[8:5]);
+                        temp_data[8]  = (i_data_a[11:8]  == i_data_b[7:4]);
+                        temp_data[9]  = (i_data_a[12:9]  == i_data_b[6:3]);
+                        temp_data[10] = (i_data_a[13:10] == i_data_b[5:2]);
+                        temp_data[11] = (i_data_a[14:11] == i_data_b[4:1]);
+                        temp_data[12] = (i_data_a[15:12] == i_data_b[3:0]);
                         result_reg <= temp_data;
                     end
                     4'b1001: begin // Transpose an 8*8 matrix
