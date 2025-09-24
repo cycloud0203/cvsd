@@ -54,7 +54,7 @@ module alu #(
     
         
     // Output assignments
-    assign o_busy = (state == BUSY) || (state == MATRIX_INPUT) || (state == MATRIX_OUTPUT);
+    assign o_busy = (state == BUSY) || (state == MATRIX_OUTPUT);
     assign o_out_valid = out_valid_reg;
     assign o_data = result_reg;
     
@@ -249,9 +249,7 @@ module alu #(
                         // count CPOP of data_a, 0 <= CPOP <= 16
                         integer cpop;
                         reg [DATA_W-1:0] temp_data;
-                        reg temp_bit;
                         cpop = 0;
-
                         for (int i = 0; i < DATA_W; i = i + 1) begin
                             if (i_data_a[i] == 1'b1) begin
                                 cpop = cpop + 1;
@@ -265,9 +263,8 @@ module alu #(
                         
                         // do LRCW shift on temp_data
                         for (int i = 0; i < cpop; i = i + 1) begin
-                            temp_bit = ~temp_data[15];
                             temp_data = temp_data << 1;
-                            temp_data[0] = temp_bit;
+                            temp_data = ~temp_data;
                         end
 
                         result_reg <= temp_data;
@@ -332,7 +329,12 @@ module alu #(
                         result_reg <= {DATA_W{1'b0}};  // Default to zero for unsupported instructions
                     end
                 endcase
-                out_valid_reg <= 1'b1;
+                // Only set out_valid for single-cycle instructions, not for matrix transpose
+                if (i_inst != 4'b1001) begin
+                    out_valid_reg <= 1'b1;
+                end else begin
+                    out_valid_reg <= 1'b0;
+                end
             end else if (state == MATRIX_INPUT && i_in_valid) begin
                 // Collect matrix input data (columns 1-7)
                 input_count <= input_count + 1'b1;
