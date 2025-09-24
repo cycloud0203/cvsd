@@ -16,8 +16,10 @@ module alu #(
 );
 
     // State machine states
-    localparam IDLE = 1'b0;
-    localparam BUSY = 1'b1;
+    localparam IDLE = 3'b000;
+    localparam BUSY = 3'b001;
+    localparam MATRIX_INPUT = 3'b010;
+    localparam MATRIX_OUTPUT = 3'b011;
     
     // Saturation values for 16-bit signed numbers
     localparam signed [DATA_W-1:0] MAX_VALUE = 16'h7FFF; // 0111_1111_1111_1111
@@ -31,10 +33,16 @@ module alu #(
     localparam signed [ACC_W-1:0] ACC_MIN_VALUE = 36'h8_0000_0000; // -2^35
     
     // Internal registers
-    reg state, next_state;
+    reg [2:0] state, next_state;
     reg [DATA_W-1:0] result_reg;
     reg out_valid_reg;
     reg signed [ACC_W-1:0] accumulator;  // 36-bit accumulator
+    
+    // Matrix transpose registers
+    reg [1:0] matrix [0:7][0:7];  // 8x8 matrix of 2-bit entries
+    reg [2:0] input_col_count;    // Count of input columns received (0-7)
+    reg [2:0] output_col_count;   // Count of output columns transmitted (0-7)
+    reg matrix_transpose_active;  // Flag to indicate matrix transpose operation
     
     // Temporary variables for overflow detection and operations
     reg signed [DATA_W:0] temp_result;    // 17-bit for overflow detection
@@ -46,7 +54,7 @@ module alu #(
     
         
     // Output assignments
-    assign o_busy = (state == BUSY);
+    assign o_busy = (state == BUSY) || (state == MATRIX_INPUT) || (state == MATRIX_OUTPUT);
     assign o_out_valid = out_valid_reg;
     assign o_data = result_reg;
     
@@ -54,14 +62,30 @@ module alu #(
     always @(*) begin
         case (state)
             IDLE: begin
-                if (i_in_valid) begin
-                    next_state = BUSY;
+                if (i_in_valid && i_inst == 4'b1001) begin
+                    next_state = MATRIX_INPUT;  // Matrix transpose operation
+                end else if (i_in_valid) begin
+                    next_state = BUSY;  // Single cycle operation
                 end else begin
                     next_state = IDLE;
                 end
             end
             BUSY: begin
                 next_state = IDLE;  // Single cycle operation
+            end
+            MATRIX_INPUT: begin
+                if (input_col_count == 3'd7) begin
+                    next_state = MATRIX_OUTPUT;  // All input columns received
+                end else begin
+                    next_state = MATRIX_INPUT;  // Continue collecting input
+                end
+            end
+            MATRIX_OUTPUT: begin
+                if (output_col_count == 3'd7) begin
+                    next_state = IDLE;  // All output columns transmitted
+                end else begin
+                    next_state = MATRIX_OUTPUT;  // Continue transmitting output
+                end
             end
             default: next_state = IDLE;
         endcase
@@ -73,6 +97,15 @@ module alu #(
             result_reg <= {DATA_W{1'b0}};
             out_valid_reg <= 1'b0;
             accumulator <= {ACC_W{1'b0}};  // Initialize accumulator to 0
+            input_col_count <= 3'd0;
+            output_col_count <= 3'd0;
+            matrix_transpose_active <= 1'b0;
+            // Initialize matrix to zeros
+            for (int i = 0; i < 8; i = i + 1) begin
+                for (int j = 0; j < 8; j = j + 1) begin
+                    matrix[i][j] <= 2'd0;
+                end
+            end
             $display("accumulator initial value: %d", accumulator);
         end else begin
             if (state == IDLE && i_in_valid) begin
@@ -214,7 +247,9 @@ module alu #(
                         // count CPOP of data_a, 0 <= CPOP <= 16
                         integer cpop;
                         reg [DATA_W-1:0] temp_data;
+                        reg temp_bit;
                         cpop = 0;
+
                         for (int i = 0; i < DATA_W; i = i + 1) begin
                             if (i_data_a[i] == 1'b1) begin
                                 cpop = cpop + 1;
@@ -228,8 +263,9 @@ module alu #(
                         
                         // do LRCW shift on temp_data
                         for (int i = 0; i < cpop; i = i + 1) begin
+                            temp_bit = ~temp_data[15];
                             temp_data = temp_data << 1;
-                            temp_data = ~temp_data;
+                            temp_data[0] = temp_bit;
                         end
 
                         result_reg <= temp_data;
@@ -246,7 +282,7 @@ module alu #(
                         reg [15:0] cnt;
                         cnt = 0;
                         for (int i = 15; i >= 0; i = i - 1) begin
-                            if (i_data_a[15-i] == 1'b0) begin
+                            if (i_data_a[i] == 1'b0) begin
                                 cnt = cnt + 1;
                             end else begin
                                 break;
@@ -257,24 +293,58 @@ module alu #(
                     4'b1000: begin // Reverse Match4 (Custom bit level operation)
                         reg [15:0] temp_data;
                         // for bit 13~15: 0
-                        temp_data[15:13] = 0;
+                        temp_data[15:13] = 3'b000;
                         // for bit 0~12: o_data[i] = i_data_a[i+3:i] == i_data_b[15-i:12-i]
-                        for (int i = 0; i < 13; i = i + 1) begin
-                            temp_data[i] = i_data_a[i+3:i] == i_data_b[15-i:12-i];
-                        end
+                        temp_data[0] = (i_data_a[3:0] == i_data_b[15:12]);
+                        temp_data[1] = (i_data_a[4:1] == i_data_b[14:11]);
+                        temp_data[2] = (i_data_a[5:2] == i_data_b[13:10]);
+                        temp_data[3] = (i_data_a[6:3] == i_data_b[12:9]);
+                        temp_data[4] = (i_data_a[7:4] == i_data_b[11:8]);
+                        temp_data[5] = (i_data_a[8:5] == i_data_b[10:7]);
+                        temp_data[6] = (i_data_a[9:6] == i_data_b[9:6]);
+                        temp_data[7] = (i_data_a[10:7] == i_data_b[8:5]);
+                        temp_data[8] = (i_data_a[11:8] == i_data_b[7:4]);
+                        temp_data[9] = (i_data_a[12:9] == i_data_b[6:3]);
+                        temp_data[10] = (i_data_a[13:10] == i_data_b[5:2]);
+                        temp_data[11] = (i_data_a[14:11] == i_data_b[4:1]);
+                        temp_data[12] = (i_data_a[15:12] == i_data_b[3:0]);
                         result_reg <= temp_data;
                     end
                     4'b1001: begin // Transpose an 8*8 matrix
-                        // transpose an 8*8 matrix
-                        // matrix is 8*8 unsigned integer
-                        // transpose the matrix
-                        result_reg <= (i_data_a >> 1) & (i_data_a >> 2) & (i_data_a >> 3) & (i_data_a >> 4);
+                        // This case is handled in the state machine logic below
+                        // Single cycle operations are handled here, matrix transpose is multi-cycle
                     end
                     default: begin
                         result_reg <= {DATA_W{1'b0}};  // Default to zero for unsupported instructions
                     end
                 endcase
                 out_valid_reg <= 1'b1;
+            end else if (state == MATRIX_INPUT && i_in_valid) begin
+                // Collect input data for matrix transpose
+                // i_data_a contains one column vector (8 2-bit entries)
+                // Map i_data_a[15:14] to row 0, i_data_a[13:12] to row 1, ..., i_data_a[1:0] to row 7
+                matrix[0][input_col_count] <= i_data_a[15:14];
+                matrix[1][input_col_count] <= i_data_a[13:12];
+                matrix[2][input_col_count] <= i_data_a[11:10];
+                matrix[3][input_col_count] <= i_data_a[9:8];
+                matrix[4][input_col_count] <= i_data_a[7:6];
+                matrix[5][input_col_count] <= i_data_a[5:4];
+                matrix[6][input_col_count] <= i_data_a[3:2];
+                matrix[7][input_col_count] <= i_data_a[1:0];
+                
+                input_col_count <= input_col_count + 1'b1;
+                out_valid_reg <= 1'b0;  // No output during input phase
+            end else if (state == MATRIX_OUTPUT) begin
+                // Output transposed matrix data
+                // Output one column at a time (which is one row of the original matrix)
+                // Pack the column data into the same format as input
+                result_reg <= {matrix[0][output_col_count], matrix[1][output_col_count], 
+                              matrix[2][output_col_count], matrix[3][output_col_count],
+                              matrix[4][output_col_count], matrix[5][output_col_count],
+                              matrix[6][output_col_count], matrix[7][output_col_count]};
+                
+                output_col_count <= output_col_count + 1'b1;
+                out_valid_reg <= 1'b1;  // Valid output during output phase
             end else begin
                 out_valid_reg <= 1'b0;
             end
