@@ -207,6 +207,65 @@ module alu #(
                     default: begin
                         result_reg <= {DATA_W{1'b0}};  // Default to zero for unsupported instructions
                     end
+                    4'b0100: begin // Binary to gray code 
+                        // calculate the gray code of the binary input
+                        // gray code = (binary >> 1) ^ binary
+                        // data_a is unsigned integer
+                        result_reg <= (i_data_a >> 1) ^ i_data_a;
+                    end
+                    4'b0101: begin // LRCW shift
+                        // count CPOP of data_a, 0 <= CPOP <= 16
+                        integer cpop;
+                        reg [DATA_W-1:0] temp_data;
+                        cpop = 0;
+                        for (int i = 0; i < DATA_W; i = i + 1) begin
+                            if (i_data_a[i] == 1'b1) begin
+                                cpop = cpop + 1;
+                            end
+                        end
+
+                        //$display("CPOP of data_a: %d", cpop);
+
+                        // Initialize temp_data with i_data_b
+                        temp_data = i_data_b;
+                        
+                        // do LRCW shift on temp_data
+                        for (int i = 0; i < cpop; i = i + 1) begin
+                            temp_data = temp_data << 1;
+                            temp_data = ~temp_data;
+                        end
+
+                        result_reg <= temp_data;
+                    end
+                    4'b0110: begin // right rotate
+                    reg [2*DATA_W-1:0] temp_data; // 32-bit temp data
+                    temp_data = {i_data_a, i_data_a};
+                    // data_b is shift amount between 0 and 16(inclusive)
+                    temp_data = temp_data >> i_data_b;
+                    result_reg <= temp_data[DATA_W-1:0];
+                    end
+                    4'b0111: begin // Count leading zeros
+                        // count leading zeros of data_a
+                        integer cpop;
+                        cpop = 0;
+                        for (int i = 0; i < DATA_W; i = i + 1) begin
+                            if (i_data_a[i] == 1'b1) begin
+                                cpop = cpop + 1;
+                            end
+                        end
+                        result_reg <= cpop;
+                    end
+                    4'b1000: begin // Reverse Match4 (Custom bit level operation)
+                        // reverse match4 of data_a
+                        // reverse match4 = (data_a >> 1) & (data_a >> 2) & (data_a >> 3) & (data_a >> 4)
+                        result_reg <= (i_data_a >> 1) & (i_data_a >> 2) & (i_data_a >> 3) & (i_data_a >> 4);
+                    end
+                    4'b1001: begin // Transpose an 8*8 matrix
+                        // transpose an 8*8 matrix
+                        // matrix is 8*8 unsigned integer
+                        // transpose the matrix
+                        result_reg <= (i_data_a >> 1) & (i_data_a >> 2) & (i_data_a >> 3) & (i_data_a >> 4);
+                    end
                 endcase
                 out_valid_reg <= 1'b1;
             end else begin
