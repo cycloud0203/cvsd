@@ -16,8 +16,10 @@ module alu #(
 );
 
     // State machine states
-    localparam IDLE = 1'b0;
-    localparam BUSY = 1'b1;
+    localparam IDLE = 2'b00;
+    localparam BUSY = 2'b01;
+    localparam MATRIX_INPUT = 2'b10;
+    localparam MATRIX_OUTPUT = 2'b11;
     
     // Saturation values for 16-bit signed numbers
     localparam signed [DATA_W-1:0] MAX_VALUE = 16'h7FFF; // 0111_1111_1111_1111
@@ -31,10 +33,16 @@ module alu #(
     localparam signed [ACC_W-1:0] ACC_MIN_VALUE = 36'h8_0000_0000; // -2^35
     
     // Internal registers
-    reg state, next_state;
+    reg [1:0] state, next_state;
     reg [DATA_W-1:0] result_reg;
     reg out_valid_reg;
     reg signed [ACC_W-1:0] accumulator;  // 36-bit accumulator
+    
+    // Matrix transpose registers
+    reg [1:0] matrix [7:0][7:0];  // 8x8 matrix, each element is 2 bits
+    reg [2:0] input_count;        // Count of received input cycles (0-7)
+    reg [2:0] output_count;       // Count of output cycles (0-7)
+    reg [INST_W-1:0] current_inst; // Store current instruction for multi-cycle operations
     
     // Temporary variables for overflow detection and operations
     reg signed [DATA_W:0] temp_result;    // 17-bit for overflow detection
@@ -46,7 +54,7 @@ module alu #(
     
         
     // Output assignments
-    assign o_busy = (state == BUSY);
+    assign o_busy = (state == BUSY) || (state == MATRIX_INPUT) || (state == MATRIX_OUTPUT);
     assign o_out_valid = out_valid_reg;
     assign o_data = result_reg;
     
@@ -55,13 +63,31 @@ module alu #(
         case (state)
             IDLE: begin
                 if (i_in_valid) begin
-                    next_state = BUSY;
+                    if (i_inst == 4'b1001) begin
+                        next_state = MATRIX_INPUT;
+                    end else begin
+                        next_state = BUSY;
+                    end
                 end else begin
                     next_state = IDLE;
                 end
             end
             BUSY: begin
                 next_state = IDLE;  // Single cycle operation
+            end
+            MATRIX_INPUT: begin
+                if (i_in_valid && input_count == 3'd7) begin
+                    next_state = MATRIX_OUTPUT;
+                end else begin
+                    next_state = MATRIX_INPUT;
+                end
+            end
+            MATRIX_OUTPUT: begin
+                if (output_count == 3'd7) begin
+                    next_state = IDLE;
+                end else begin
+                    next_state = MATRIX_OUTPUT;
+                end
             end
             default: next_state = IDLE;
         endcase
@@ -73,6 +99,15 @@ module alu #(
             result_reg <= {DATA_W{1'b0}};
             out_valid_reg <= 1'b0;
             accumulator <= {ACC_W{1'b0}};  // Initialize accumulator to 0
+            input_count <= 3'd0;
+            output_count <= 3'd0;
+            current_inst <= 4'd0;
+            // Initialize matrix to all zeros
+            for (int i = 0; i < 8; i = i + 1) begin
+                for (int j = 0; j < 8; j = j + 1) begin
+                    matrix[i][j] <= 2'b00;
+                end
+            end
             $display("accumulator initial value: %d", accumulator);
         end else begin
             if (state == IDLE && i_in_valid) begin
@@ -275,13 +310,139 @@ module alu #(
                         result_reg <= temp_data;
                     end
                     4'b1001: begin // Transpose an 8*8 matrix
-                        // transpose an 8*8 matrix
-                        // matrix is 8*8 unsigned integer
-                        // transpose the matrix
-                        result_reg <= (i_data_a >> 1) & (i_data_a >> 2) & (i_data_a >> 3) & (i_data_a >> 4);
+                        // Initialize matrix transpose operation
+                        current_inst <= i_inst;
+                        input_count <= 3'd0;
+                        output_count <= 3'd0;
+                        // Store first column of matrix
+                        matrix[0][0] <= i_data_a[15:14];  // Row 0
+                        matrix[1][0] <= i_data_a[13:12];  // Row 1
+                        matrix[2][0] <= i_data_a[11:10];  // Row 2
+                        matrix[3][0] <= i_data_a[9:8];   // Row 3
+                        matrix[4][0] <= i_data_a[7:6];   // Row 4
+                        matrix[5][0] <= i_data_a[5:4];   // Row 5
+                        matrix[6][0] <= i_data_a[3:2];   // Row 6
+                        matrix[7][0] <= i_data_a[1:0];   // Row 7
+                        result_reg <= {DATA_W{1'b0}};
                     end
                     default: begin
                         result_reg <= {DATA_W{1'b0}};  // Default to zero for unsupported instructions
+                    end
+                endcase
+                out_valid_reg <= 1'b1;
+            end else if (state == MATRIX_INPUT && i_in_valid) begin
+                // Collect matrix input data (columns 1-7)
+                input_count <= input_count + 1'b1;
+                // Store column data based on input_count
+                case (input_count)
+                    3'd0: begin  // Column 1
+                        matrix[0][1] <= i_data_a[15:14];
+                        matrix[1][1] <= i_data_a[13:12];
+                        matrix[2][1] <= i_data_a[11:10];
+                        matrix[3][1] <= i_data_a[9:8];
+                        matrix[4][1] <= i_data_a[7:6];
+                        matrix[5][1] <= i_data_a[5:4];
+                        matrix[6][1] <= i_data_a[3:2];
+                        matrix[7][1] <= i_data_a[1:0];
+                    end
+                    3'd1: begin  // Column 2
+                        matrix[0][2] <= i_data_a[15:14];
+                        matrix[1][2] <= i_data_a[13:12];
+                        matrix[2][2] <= i_data_a[11:10];
+                        matrix[3][2] <= i_data_a[9:8];
+                        matrix[4][2] <= i_data_a[7:6];
+                        matrix[5][2] <= i_data_a[5:4];
+                        matrix[6][2] <= i_data_a[3:2];
+                        matrix[7][2] <= i_data_a[1:0];
+                    end
+                    3'd2: begin  // Column 3
+                        matrix[0][3] <= i_data_a[15:14];
+                        matrix[1][3] <= i_data_a[13:12];
+                        matrix[2][3] <= i_data_a[11:10];
+                        matrix[3][3] <= i_data_a[9:8];
+                        matrix[4][3] <= i_data_a[7:6];
+                        matrix[5][3] <= i_data_a[5:4];
+                        matrix[6][3] <= i_data_a[3:2];
+                        matrix[7][3] <= i_data_a[1:0];
+                    end
+                    3'd3: begin  // Column 4
+                        matrix[0][4] <= i_data_a[15:14];
+                        matrix[1][4] <= i_data_a[13:12];
+                        matrix[2][4] <= i_data_a[11:10];
+                        matrix[3][4] <= i_data_a[9:8];
+                        matrix[4][4] <= i_data_a[7:6];
+                        matrix[5][4] <= i_data_a[5:4];
+                        matrix[6][4] <= i_data_a[3:2];
+                        matrix[7][4] <= i_data_a[1:0];
+                    end
+                    3'd4: begin  // Column 5
+                        matrix[0][5] <= i_data_a[15:14];
+                        matrix[1][5] <= i_data_a[13:12];
+                        matrix[2][5] <= i_data_a[11:10];
+                        matrix[3][5] <= i_data_a[9:8];
+                        matrix[4][5] <= i_data_a[7:6];
+                        matrix[5][5] <= i_data_a[5:4];
+                        matrix[6][5] <= i_data_a[3:2];
+                        matrix[7][5] <= i_data_a[1:0];
+                    end
+                    3'd5: begin  // Column 6
+                        matrix[0][6] <= i_data_a[15:14];
+                        matrix[1][6] <= i_data_a[13:12];
+                        matrix[2][6] <= i_data_a[11:10];
+                        matrix[3][6] <= i_data_a[9:8];
+                        matrix[4][6] <= i_data_a[7:6];
+                        matrix[5][6] <= i_data_a[5:4];
+                        matrix[6][6] <= i_data_a[3:2];
+                        matrix[7][6] <= i_data_a[1:0];
+                    end
+                    3'd6: begin  // Column 7
+                        matrix[0][7] <= i_data_a[15:14];
+                        matrix[1][7] <= i_data_a[13:12];
+                        matrix[2][7] <= i_data_a[11:10];
+                        matrix[3][7] <= i_data_a[9:8];
+                        matrix[4][7] <= i_data_a[7:6];
+                        matrix[5][7] <= i_data_a[5:4];
+                        matrix[6][7] <= i_data_a[3:2];
+                        matrix[7][7] <= i_data_a[1:0];
+                    end
+                endcase
+                out_valid_reg <= 1'b0;
+            end else if (state == MATRIX_OUTPUT) begin
+                // Output transposed matrix data
+                output_count <= output_count + 1'b1;
+                // Output row as column vector (transpose operation)
+                case (output_count)
+                    3'd0: begin  // Output row 0 as column vector
+                        result_reg <= {matrix[0][0], matrix[0][1], matrix[0][2], matrix[0][3], 
+                                     matrix[0][4], matrix[0][5], matrix[0][6], matrix[0][7]};
+                    end
+                    3'd1: begin  // Output row 1 as column vector
+                        result_reg <= {matrix[1][0], matrix[1][1], matrix[1][2], matrix[1][3], 
+                                     matrix[1][4], matrix[1][5], matrix[1][6], matrix[1][7]};
+                    end
+                    3'd2: begin  // Output row 2 as column vector
+                        result_reg <= {matrix[2][0], matrix[2][1], matrix[2][2], matrix[2][3], 
+                                     matrix[2][4], matrix[2][5], matrix[2][6], matrix[2][7]};
+                    end
+                    3'd3: begin  // Output row 3 as column vector
+                        result_reg <= {matrix[3][0], matrix[3][1], matrix[3][2], matrix[3][3], 
+                                     matrix[3][4], matrix[3][5], matrix[3][6], matrix[3][7]};
+                    end
+                    3'd4: begin  // Output row 4 as column vector
+                        result_reg <= {matrix[4][0], matrix[4][1], matrix[4][2], matrix[4][3], 
+                                     matrix[4][4], matrix[4][5], matrix[4][6], matrix[4][7]};
+                    end
+                    3'd5: begin  // Output row 5 as column vector
+                        result_reg <= {matrix[5][0], matrix[5][1], matrix[5][2], matrix[5][3], 
+                                     matrix[5][4], matrix[5][5], matrix[5][6], matrix[5][7]};
+                    end
+                    3'd6: begin  // Output row 6 as column vector
+                        result_reg <= {matrix[6][0], matrix[6][1], matrix[6][2], matrix[6][3], 
+                                     matrix[6][4], matrix[6][5], matrix[6][6], matrix[6][7]};
+                    end
+                    3'd7: begin  // Output row 7 as column vector
+                        result_reg <= {matrix[7][0], matrix[7][1], matrix[7][2], matrix[7][3], 
+                                     matrix[7][4], matrix[7][5], matrix[7][6], matrix[7][7]};
                     end
                 endcase
                 out_valid_reg <= 1'b1;
