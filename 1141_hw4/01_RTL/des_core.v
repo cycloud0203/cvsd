@@ -1,13 +1,29 @@
 `timescale 1ns/10ps
 
 module des_core (
-    input         clk,          // Clock for pipeline registers
+    input         clk,          // Clock
     input         rst,          // Reset
+    input         start,        // Start computation
     input  [63:0] data_in,      // 64-bit plaintext/ciphertext
     input  [63:0] key_in,       // 64-bit key
     input         decrypt,      // 0: encrypt, 1: decrypt
-    output [63:0] data_out      // 64-bit output
+    output [63:0] data_out,     // 64-bit output
+    output        done          // Computation done flag
 );
+
+// ========================================
+// State Machine
+// ========================================
+localparam IDLE    = 2'd0;
+localparam COMPUTE = 2'd1;
+localparam DONE    = 2'd2;
+
+reg [1:0] state, state_next;
+reg [3:0] round_cnt, round_cnt_next;  // 0-15 for 16 rounds
+reg [31:0] l_reg, l_reg_next;
+reg [31:0] r_reg, r_reg_next;
+reg [63:0] output_reg, output_reg_next;
+reg done_reg, done_reg_next;
 
 // ========================================
 // Initial Permutation (IP)
@@ -501,10 +517,8 @@ function [767:0] generate_subkeys;  // 16 subkeys * 48 bits = 768 bits
 endfunction
 
 // ========================================
-// DES Algorithm - 16-stage Pipelined Rounds
+// Subkey storage
 // ========================================
-
-// Generate subkeys (combinational)
 wire [767:0] all_subkeys;
 wire [47:0] subkey [0:15];
 
@@ -518,106 +532,115 @@ generate
     end
 endgenerate
 
-// Initial permutation (combinational input stage)
+// ========================================
+// Combinational Logic - FSM and Datapath
+// ========================================
 wire [63:0] ip_data;
+wire [31:0] f_out;
+
 assign ip_data = initial_permutation(data_in);
+assign f_out = f_function(r_reg, subkey[round_cnt]);
 
-// Pipeline registers for L and R through 16 rounds
-reg [31:0] l_pipe [0:16];
-reg [31:0] r_pipe [0:16];
+always @(*) begin
+    // Default assignments
+    state_next = state;
+    round_cnt_next = round_cnt;
+    l_reg_next = l_reg;
+    r_reg_next = r_reg;
+    output_reg_next = output_reg;
+    done_reg_next = 1'b0;
+    
+    case (state)
+        IDLE: begin
+            if (start) begin
+                // Load initial values after IP
+                l_reg_next = ip_data[63:32];
+                r_reg_next = ip_data[31:0];
+                round_cnt_next = 4'd0;
+                state_next = COMPUTE;
+            end
+        end
+        
+        COMPUTE: begin
+            if (round_cnt < 4'd15) begin
+                // Perform one round: L' = R, R' = L XOR f(R, K)
+                l_reg_next = r_reg;
+                r_reg_next = l_reg ^ f_out;
+                round_cnt_next = round_cnt + 4'd1;
+                state_next = COMPUTE;
+            end else begin
+                // Last round (round 15): perform round and prepare output
+                l_reg_next = r_reg;
+                r_reg_next = l_reg ^ f_out;
+                state_next = DONE;
+            end
+        end
+        
+        DONE: begin
+            // Apply final permutation (swap L and R first)
+            output_reg_next = final_permutation({r_reg, l_reg});
+            done_reg_next = 1'b1;
+            
+            // Check if starting new computation
+            if (start) begin
+                l_reg_next = ip_data[63:32];
+                r_reg_next = ip_data[31:0];
+                round_cnt_next = 4'd0;
+                state_next = COMPUTE;
+            end else begin
+                state_next = IDLE;
+            end
+        end
+        
+        default: state_next = IDLE;
+    endcase
+end
 
-// Combinational logic for each round
-wire [31:0] l_next [0:16];
-wire [31:0] r_next [0:16];
-
-// Round 0 input (from initial permutation)
-assign l_next[0] = ip_data[63:32];
-assign r_next[0] = ip_data[31:0];
-
-// Generate 16 rounds of Feistel structure
-generate
-    for (i = 0; i < 16; i = i + 1) begin : des_rounds
-        assign l_next[i+1] = r_pipe[i];
-        assign r_next[i+1] = l_pipe[i] ^ f_function(r_pipe[i], subkey[i]);
-    end
-endgenerate
-
-// Pipeline registers
+// ========================================
+// Sequential Logic
+// ========================================
 always @(posedge clk or posedge rst) begin
     if (rst) begin
-        l_pipe[0] <= 32'd0;
-        r_pipe[0] <= 32'd0;
-        l_pipe[1] <= 32'd0;
-        r_pipe[1] <= 32'd0;
-        l_pipe[2] <= 32'd0;
-        r_pipe[2] <= 32'd0;
-        l_pipe[3] <= 32'd0;
-        r_pipe[3] <= 32'd0;
-        l_pipe[4] <= 32'd0;
-        r_pipe[4] <= 32'd0;
-        l_pipe[5] <= 32'd0;
-        r_pipe[5] <= 32'd0;
-        l_pipe[6] <= 32'd0;
-        r_pipe[6] <= 32'd0;
-        l_pipe[7] <= 32'd0;
-        r_pipe[7] <= 32'd0;
-        l_pipe[8] <= 32'd0;
-        r_pipe[8] <= 32'd0;
-        l_pipe[9] <= 32'd0;
-        r_pipe[9] <= 32'd0;
-        l_pipe[10] <= 32'd0;
-        r_pipe[10] <= 32'd0;
-        l_pipe[11] <= 32'd0;
-        r_pipe[11] <= 32'd0;
-        l_pipe[12] <= 32'd0;
-        r_pipe[12] <= 32'd0;
-        l_pipe[13] <= 32'd0;
-        r_pipe[13] <= 32'd0;
-        l_pipe[14] <= 32'd0;
-        r_pipe[14] <= 32'd0;
-        l_pipe[15] <= 32'd0;
-        r_pipe[15] <= 32'd0;
-        l_pipe[16] <= 32'd0;
-        r_pipe[16] <= 32'd0;
+        state <= IDLE;
+        round_cnt <= 4'd0;
+        l_reg <= 32'd0;
+        r_reg <= 32'd0;
+        output_reg <= 64'd0;
+        done_reg <= 1'b0;
     end else begin
-        l_pipe[0] <= l_next[0];
-        r_pipe[0] <= r_next[0];
-        l_pipe[1] <= l_next[1];
-        r_pipe[1] <= r_next[1];
-        l_pipe[2] <= l_next[2];
-        r_pipe[2] <= r_next[2];
-        l_pipe[3] <= l_next[3];
-        r_pipe[3] <= r_next[3];
-        l_pipe[4] <= l_next[4];
-        r_pipe[4] <= r_next[4];
-        l_pipe[5] <= l_next[5];
-        r_pipe[5] <= r_next[5];
-        l_pipe[6] <= l_next[6];
-        r_pipe[6] <= r_next[6];
-        l_pipe[7] <= l_next[7];
-        r_pipe[7] <= r_next[7];
-        l_pipe[8] <= l_next[8];
-        r_pipe[8] <= r_next[8];
-        l_pipe[9] <= l_next[9];
-        r_pipe[9] <= r_next[9];
-        l_pipe[10] <= l_next[10];
-        r_pipe[10] <= r_next[10];
-        l_pipe[11] <= l_next[11];
-        r_pipe[11] <= r_next[11];
-        l_pipe[12] <= l_next[12];
-        r_pipe[12] <= r_next[12];
-        l_pipe[13] <= l_next[13];
-        r_pipe[13] <= r_next[13];
-        l_pipe[14] <= l_next[14];
-        r_pipe[14] <= r_next[14];
-        l_pipe[15] <= l_next[15];
-        r_pipe[15] <= r_next[15];
-        l_pipe[16] <= l_next[16];
-        r_pipe[16] <= r_next[16];
+        state <= state_next;
+        round_cnt <= round_cnt_next;
+        l_reg <= l_reg_next;
+        r_reg <= r_reg_next;
+        output_reg <= output_reg_next;
+        done_reg <= done_reg_next;
+        
+        // Debug:// Display L and R values for each round
+        if (state == COMPUTE) begin
+            //$display("Round %2d: L = %08h, R = %08h", round_cnt, l_reg, r_reg);
+        end
+        
+        if (state_next == DONE && state == COMPUTE) begin
+            //$display("Round 16: L = %08h, R = %08h (Final)", l_reg_next, r_reg_next);
+            //$display("After FP: Output = %016h", output_reg_next);
+        end
+        
+        if (state == IDLE && state_next == COMPUTE && start) begin
+            //$display("========================================");
+            //$display("DES Core Starting New Computation");
+            //$display("Data: %016h", data_in);
+            //$display("Key:  %016h", key_in);
+            //$display("Mode: %s", decrypt ? "Decrypt" : "Encrypt");
+            //$display("After IP: L0 = %08h, R0 = %08h", l_reg_next, r_reg_next);
+            //$display("========================================");
+        end
     end
 end
 
-// Final permutation (output from last pipeline stage)
-assign data_out = final_permutation({r_pipe[16], l_pipe[16]});
+// ========================================
+// Output Assignment
+// ========================================
+assign data_out = output_reg;
+assign done = done_reg;
 
 endmodule

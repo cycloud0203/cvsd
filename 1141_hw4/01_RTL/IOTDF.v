@@ -10,59 +10,78 @@ output         valid;
 output [127:0] iot_out;
 
 // ========================================
+// Function Codes
+// ========================================
+localparam DES_ENCRYPT = 3'b001;
+localparam DES_DECRYPT = 3'b010;
+localparam CRC_GEN     = 3'b011;
+localparam SORT        = 3'b100;
+
+// ========================================
 // FSM State Definition
 // ========================================
-localparam IDLE     = 2'd0;
-localparam LOAD     = 2'd1;
-localparam PIPELINE = 2'd2;  // Load and Compute simultaneously
+localparam IDLE    = 2'd0;
+localparam LOAD    = 2'd1;
+localparam COMPUTE = 2'd2;
+
 
 // ========================================
 // Registers & Wires
 // ========================================
 reg [1:0]   current_state, next_state;
 reg [3:0]   load_cnt, load_cnt_next;
-reg [3:0]   comp_cnt, comp_cnt_next;  // Compute counter (16 cycles for DES)
 
-// Ping-pong dual buffer
-reg [127:0] data_buf0, data_buf0_next;  // Buffer 0
-reg [127:0] data_buf1, data_buf1_next;  // Buffer 1
-reg         buf0_full, buf0_full_next;  // Buffer 0 full flag
-reg         buf1_full, buf1_full_next;  // Buffer 1 full flag
-reg         compute_buf_sel, compute_buf_sel_next;  // 0: compute buf0, 1: compute buf1
-reg         load_buf_sel, load_buf_sel_next;        // 0: load to buf0, 1: load to buf1
+// Single buffer
+reg [127:0] data_buf, data_buf_next;
 
-// output registers
+// Output registers
 reg         busy_reg, busy_reg_next;
 reg [127:0] result_reg, result_reg_next;
 reg         valid_reg, valid_reg_next;
 
+// Control signals for computation cores
+reg         des_start_reg, des_start_reg_next;
+reg         crc_sort_start_reg, crc_sort_start_reg_next;
+
 // ========================================
-// DES Core Wires
+// DES Core Interface
 // ========================================
 wire [63:0] des_data_in;
 wire [63:0] des_key_in;
 wire        des_decrypt;
 wire [63:0] des_data_out;
+wire        des_done;
 
-// Select which buffer to compute (use stable compute_buf_sel)
-assign des_data_in = (compute_buf_sel == 1'b0) ? data_buf0[63:0] : data_buf1[63:0];
-assign des_key_in  = (compute_buf_sel == 1'b0) ? data_buf0[127:64] : data_buf1[127:64];
+assign des_data_in = data_buf[63:0];
+assign des_key_in  = data_buf[127:64];
+assign des_decrypt = (fn_sel == DES_DECRYPT);
 
-// encrypt: 3'b001 decrypt: 3'b010
-assign des_decrypt = fn_sel[1];
-
-// ========================================
-// DES Core Instantiation
-// ========================================
 des_core des_inst (
     .clk(clk),
     .rst(rst),
+    .start(des_start_reg),
     .data_in(des_data_in),
     .key_in(des_key_in),
     .decrypt(des_decrypt),
-    .data_out(des_data_out)
+    .data_out(des_data_out),
+    .done(des_done)
 );
 
+// ========================================
+// CRC/Sort Core Interface
+// ========================================
+wire [127:0] crc_sort_data_out;
+wire         crc_sort_done;
+
+crc_sort_core crc_sort_inst (
+    .clk(clk),
+    .rst(rst),
+    .start(crc_sort_start_reg),
+    .data_in(data_buf),
+    .fn_sel(fn_sel),
+    .data_out(crc_sort_data_out),
+    .done(crc_sort_done)
+);
 
 // ========================================
 // Combinational Logic - Output Assignment
@@ -77,27 +96,22 @@ assign iot_out = result_reg;
 always @(*) begin
     // Default assignments to avoid latches
     load_cnt_next = load_cnt;
-    comp_cnt_next = comp_cnt;
-    data_buf0_next = data_buf0;
-    data_buf1_next = data_buf1;
-    buf0_full_next = buf0_full;
-    buf1_full_next = buf1_full;
-    compute_buf_sel_next = compute_buf_sel;
-    load_buf_sel_next = load_buf_sel;
+    data_buf_next = data_buf;
     result_reg_next = result_reg;
     valid_reg_next = 1'b0;
+    busy_reg_next = busy_reg;
+    des_start_reg_next = 1'b0;
+    crc_sort_start_reg_next = 1'b0;
     next_state = current_state;
-    
-    // busy = both buffers are full
-    busy_reg_next = buf0_full && buf1_full;
     
     case (current_state)
         IDLE: begin
             if (in_en) begin
+                // Start loading first byte
                 load_cnt_next = 4'd1;
-                load_buf_sel_next = 1'b0;  // Start loading to buf0
-                data_buf0_next[7:0] = iot_in;
+                data_buf_next[7:0] = iot_in;
                 next_state = LOAD;
+                busy_reg_next = 1'b0;  // Not busy yet
             end
             else begin
                 next_state = IDLE;
@@ -105,163 +119,80 @@ always @(*) begin
         end
         
         LOAD: begin
-            // Initial loading - always load to buf0 only
             if (in_en) begin
                 if (load_cnt < 4'd14) begin
+                    // Loading bytes 1-13
                     load_cnt_next = load_cnt + 4'd1;
                     case (load_cnt)
-                        4'd1:  data_buf0_next[15:8]   = iot_in;
-                        4'd2:  data_buf0_next[23:16]  = iot_in;
-                        4'd3:  data_buf0_next[31:24]  = iot_in;
-                        4'd4:  data_buf0_next[39:32]  = iot_in;
-                        4'd5:  data_buf0_next[47:40]  = iot_in;
-                        4'd6:  data_buf0_next[55:48]  = iot_in;
-                        4'd7:  data_buf0_next[63:56]  = iot_in;
-                        4'd8:  data_buf0_next[71:64]  = iot_in;
-                        4'd9:  data_buf0_next[79:72]  = iot_in;
-                        4'd10: data_buf0_next[87:80]  = iot_in;
-                        4'd11: data_buf0_next[95:88]  = iot_in;
-                        4'd12: data_buf0_next[103:96] = iot_in;
-                        4'd13: data_buf0_next[111:104]= iot_in;
+                        4'd1:  data_buf_next[15:8]   = iot_in;
+                        4'd2:  data_buf_next[23:16]  = iot_in;
+                        4'd3:  data_buf_next[31:24]  = iot_in;
+                        4'd4:  data_buf_next[39:32]  = iot_in;
+                        4'd5:  data_buf_next[47:40]  = iot_in;
+                        4'd6:  data_buf_next[55:48]  = iot_in;
+                        4'd7:  data_buf_next[63:56]  = iot_in;
+                        4'd8:  data_buf_next[71:64]  = iot_in;
+                        4'd9:  data_buf_next[79:72]  = iot_in;
+                        4'd10: data_buf_next[87:80]  = iot_in;
+                        4'd11: data_buf_next[95:88]  = iot_in;
+                        4'd12: data_buf_next[103:96] = iot_in;
+                        4'd13: data_buf_next[111:104]= iot_in;
                     endcase
                     next_state = LOAD;
                 end else if (load_cnt == 4'd14) begin
-                    // Second to last byte - set buf_full_next early for busy signal
+                    // Loading byte 14
                     load_cnt_next = load_cnt + 4'd1;
-                    data_buf0_next[119:112] = iot_in;
-                    buf0_full_next = 1'b1;  // Set full flag early
+                    data_buf_next[119:112] = iot_in;
+                    busy_reg_next = 1'b1;  // Busy during loading
                     next_state = LOAD;
                 end else begin
-                    // Last byte received (load_cnt == 15)
-                    data_buf0_next[127:120] = iot_in;
+                    // Loading last byte (load_cnt == 15)
+                    data_buf_next[127:120] = iot_in;
                     load_cnt_next = 4'd0;
-                    comp_cnt_next = 4'd0;  // Start compute counter
-                    compute_buf_sel_next = 1'b0;  // Start computing buf0
-                    next_state = PIPELINE;
+                    
+                    // Start appropriate computation
+                    if (fn_sel == DES_ENCRYPT || fn_sel == DES_DECRYPT) begin
+                        des_start_reg_next = 1'b1;
+                    end else if (fn_sel == CRC_GEN || fn_sel == SORT) begin
+                        crc_sort_start_reg_next = 1'b1;
+                    end
+                    
+                    next_state = COMPUTE;
                 end
             end else begin
-                // No more input, return to IDLE
+                // No more input, go back to IDLE
                 next_state = IDLE;
             end
         end
 
-        PIPELINE: begin
-            // Increment computation counter
-            if (comp_cnt < 4'd15) begin
-                comp_cnt_next = comp_cnt + 4'd1;
-            end else begin
-                // Computation done - output ready at cycle 15
-                result_reg_next = {64'b0, des_data_out};
+        COMPUTE: begin
+            // Wait for computation to complete
+            if (des_done || crc_sort_done) begin
+                // Computation complete, output ready
+                if (des_done) begin
+                    result_reg_next = {data_buf[127:64], des_data_out};
+                end else begin
+                    result_reg_next = crc_sort_data_out;
+                end
                 valid_reg_next = 1'b1;
                 
-                // Clear the buffer that just finished computing
-                if (compute_buf_sel == 1'b0) begin
-                    buf0_full_next = 1'b0;
+                // Check if we should load next data or go to IDLE
+                if (in_en) begin
+                    // Start loading next block immediately
+                    load_cnt_next = 4'd1;
+                    data_buf_next[7:0] = iot_in;
+                    next_state = LOAD;
+                    busy_reg_next = 1'b0;  // Not busy for one cycle
                 end else begin
-                    buf1_full_next = 1'b0;
+                    // No more input, go to IDLE
+                    next_state = IDLE;
+                    busy_reg_next = 1'b0;
                 end
-                
-                // Check if there's another full buffer to compute
-                // Use current full status, avoid buffer that's receiving its last byte
-                if (compute_buf_sel == 1'b0 && buf1_full && 
-                    !(load_buf_sel == 1'b1 && load_cnt == 4'd15)) begin
-                    // Switch to compute buf1 if fully loaded
-                    compute_buf_sel_next = 1'b1;
-                    comp_cnt_next = 4'd0;
-                end else if (compute_buf_sel == 1'b1 && buf0_full && 
-                             !(load_buf_sel == 1'b0 && load_cnt == 4'd15)) begin
-                    // Switch to compute buf0 if fully loaded
-                    compute_buf_sel_next = 1'b0;
-                    comp_cnt_next = 4'd0;
-                end else begin
-                    // No buffer ready to compute
-                    comp_cnt_next = 4'd0;
-                end
-            end
-            
-            // Handle loading simultaneously (independent of computation)
-            if (in_en) begin
-                // Determine which buffer to load to
-                if (load_cnt == 4'd0) begin
-                    // Need to start loading a new buffer
-                    // Load to whichever buffer is empty
-                    if (!buf0_full) begin
-                        load_buf_sel_next = 1'b0;
-                        load_cnt_next = 4'd1;
-                        data_buf0_next[7:0] = iot_in;
-                    end else if (!buf1_full) begin
-                        load_buf_sel_next = 1'b1;
-                        load_cnt_next = 4'd1;
-                        data_buf1_next[7:0] = iot_in;
-                    end
-                    // If both buffers are full, we can't load (busy condition)
-                end else begin
-                    // Continue loading to current buffer
-                    if (load_buf_sel == 1'b0) begin
-                        // Loading to buf0
-                        if (load_cnt < 4'd14) begin
-                            load_cnt_next = load_cnt + 4'd1;
-                            case (load_cnt)
-                                4'd1:  data_buf0_next[15:8]   = iot_in;
-                                4'd2:  data_buf0_next[23:16]  = iot_in;
-                                4'd3:  data_buf0_next[31:24]  = iot_in;
-                                4'd4:  data_buf0_next[39:32]  = iot_in;
-                                4'd5:  data_buf0_next[47:40]  = iot_in;
-                                4'd6:  data_buf0_next[55:48]  = iot_in;
-                                4'd7:  data_buf0_next[63:56]  = iot_in;
-                                4'd8:  data_buf0_next[71:64]  = iot_in;
-                                4'd9:  data_buf0_next[79:72]  = iot_in;
-                                4'd10: data_buf0_next[87:80]  = iot_in;
-                                4'd11: data_buf0_next[95:88]  = iot_in;
-                                4'd12: data_buf0_next[103:96] = iot_in;
-                                4'd13: data_buf0_next[111:104]= iot_in;
-                            endcase
-                        end else if (load_cnt == 4'd14) begin
-                            load_cnt_next = load_cnt + 4'd1;
-                            data_buf0_next[119:112] = iot_in;
-                            buf0_full_next = 1'b1;
-                        end else if (load_cnt == 4'd15) begin
-                            data_buf0_next[127:120] = iot_in;
-                            load_cnt_next = 4'd0;
-                        end
-                    end else begin
-                        // Loading to buf1
-                        if (load_cnt < 4'd14) begin
-                            load_cnt_next = load_cnt + 4'd1;
-                            case (load_cnt)
-                                4'd1:  data_buf1_next[15:8]   = iot_in;
-                                4'd2:  data_buf1_next[23:16]  = iot_in;
-                                4'd3:  data_buf1_next[31:24]  = iot_in;
-                                4'd4:  data_buf1_next[39:32]  = iot_in;
-                                4'd5:  data_buf1_next[47:40]  = iot_in;
-                                4'd6:  data_buf1_next[55:48]  = iot_in;
-                                4'd7:  data_buf1_next[63:56]  = iot_in;
-                                4'd8:  data_buf1_next[71:64]  = iot_in;
-                                4'd9:  data_buf1_next[79:72]  = iot_in;
-                                4'd10: data_buf1_next[87:80]  = iot_in;
-                                4'd11: data_buf1_next[95:88]  = iot_in;
-                                4'd12: data_buf1_next[103:96] = iot_in;
-                                4'd13: data_buf1_next[111:104]= iot_in;
-                            endcase
-                        end else if (load_cnt == 4'd14) begin
-                            load_cnt_next = load_cnt + 4'd1;
-                            data_buf1_next[119:112] = iot_in;
-                            buf1_full_next = 1'b1;
-                        end else if (load_cnt == 4'd15) begin
-                            data_buf1_next[127:120] = iot_in;
-                            load_cnt_next = 4'd0;
-                        end
-                    end
-                end
-            end
-            
-            // Determine next state
-            if (!in_en && comp_cnt == 4'd15 && !buf0_full_next && !buf1_full_next) begin
-                // No more input and no pending computation
-                next_state = IDLE;
             end else begin
-                next_state = PIPELINE;
+                // Still computing
+                next_state = COMPUTE;
             end
+                
         end
         
         default: begin
@@ -273,34 +204,25 @@ end
 // ========================================
 // Sequential Logic
 // ========================================
-// Data path registers
 always @(posedge clk or posedge rst) begin
     if (rst) begin
-        load_cnt        <= 4'd0;
-        comp_cnt        <= 4'd0;
-        data_buf0       <= 128'd0;
-        data_buf1       <= 128'd0;
-        buf0_full       <= 1'b0;
-        buf1_full       <= 1'b0;
-        compute_buf_sel <= 1'b0;
-        load_buf_sel    <= 1'b0;
-        result_reg      <= 128'd0;
-        valid_reg       <= 1'b0;
-        current_state   <= IDLE;
-        busy_reg        <= 1'b0;
+        load_cnt           <= 4'd0;
+        data_buf           <= 128'd0;
+        result_reg         <= 128'd0;
+        valid_reg          <= 1'b0;
+        busy_reg           <= 1'b0;
+        des_start_reg      <= 1'b0;
+        crc_sort_start_reg <= 1'b0;
+        current_state      <= IDLE;
     end else begin
-        busy_reg        <= busy_reg_next;
-        load_cnt        <= load_cnt_next;
-        comp_cnt        <= comp_cnt_next;
-        data_buf0       <= data_buf0_next;
-        data_buf1       <= data_buf1_next;
-        buf0_full       <= buf0_full_next;
-        buf1_full       <= buf1_full_next;
-        compute_buf_sel <= compute_buf_sel_next;
-        load_buf_sel    <= load_buf_sel_next;
-        result_reg      <= result_reg_next;
-        valid_reg       <= valid_reg_next;
-        current_state   <= next_state;
+        load_cnt           <= load_cnt_next;
+        data_buf           <= data_buf_next;
+        result_reg         <= result_reg_next;
+        valid_reg          <= valid_reg_next;
+        busy_reg           <= busy_reg_next;
+        des_start_reg      <= des_start_reg_next;
+        crc_sort_start_reg <= crc_sort_start_reg_next;
+        current_state      <= next_state;
     end
 end
 
