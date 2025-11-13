@@ -22,13 +22,12 @@ localparam SORT        = 3'b100;
 // ========================================
 localparam IDLE    = 2'd0;
 localparam LOAD    = 2'd1;
-localparam COMPUTE = 2'd2;
 
 
 // ========================================
 // Registers & Wires
 // ========================================
-reg [1:0]   current_state, next_state;
+(* fsm_encoding = "auto" *) reg [1:0]   current_state, next_state;
 reg [3:0]   load_cnt, load_cnt_next;
 reg         load_sel, load_sel_next;
 
@@ -67,8 +66,6 @@ wire         des_en;
 wire         crc_sort_en;
 
 assign compute_data   = (compute_sel == 1'b0) ? data_buf0 : data_buf1;
-assign des_data_in    = compute_data[63:0];
-assign des_key_in     = compute_data[127:64];
 assign mode_is_des    = (fn_sel == DES_ENCRYPT) || (fn_sel == DES_DECRYPT);
 assign mode_is_crc_sort = (fn_sel == CRC_GEN) || (fn_sel == SORT);
 assign des_decrypt    = (fn_sel == DES_DECRYPT);
@@ -76,6 +73,10 @@ assign des_decrypt    = (fn_sel == DES_DECRYPT);
 // Enable cores only when they are selected by fn_sel
 assign des_en = mode_is_des;
 assign crc_sort_en = mode_is_crc_sort;
+
+// Operand isolation: gate inputs to prevent switching in unused cores
+assign des_data_in    = des_en ? compute_data[63:0] : 64'd0;
+assign des_key_in     = des_en ? compute_data[127:64] : 64'd0;
 
 des_core des_inst (
     .clk(clk),
@@ -92,15 +93,19 @@ des_core des_inst (
 // ========================================
 // CRC/Sort Core Interface
 // ========================================
+wire [127:0] crc_sort_data_in;
 wire [127:0] crc_sort_data_out;
 wire         crc_sort_done;
+
+// Operand isolation for CRC/Sort core
+assign crc_sort_data_in = crc_sort_en ? compute_data : 128'd0;
 
 crc_sort_core crc_sort_inst (
     .clk(clk),
     .rst(rst),
     .en(crc_sort_en),
     .start(crc_sort_start_reg),
-    .data_in(compute_data),
+    .data_in(crc_sort_data_in),
     .fn_sel(fn_sel),
     .data_out(crc_sort_data_out),
     .done(crc_sort_done)
@@ -334,21 +339,14 @@ always @(*) begin
         end
     end
 
+    // Start computation when buffer is ready and not computing
     if (!compute_active_next) begin
-        if (buffer_full_next[0]) begin
-            compute_sel_next = 1'b0;
+        if (buffer_full_next[0] || buffer_full_next[1]) begin
+            compute_sel_next = buffer_full_next[0] ? 1'b0 : 1'b1;
             compute_active_next = 1'b1;
-            if ((fn_sel == DES_ENCRYPT) || (fn_sel == DES_DECRYPT)) begin
+            if (mode_is_des) begin
                 des_start_reg_next = 1'b1;
-            end else if ((fn_sel == CRC_GEN) || (fn_sel == SORT)) begin
-                crc_sort_start_reg_next = 1'b1;
-            end
-        end else if (buffer_full_next[1]) begin
-            compute_sel_next = 1'b1;
-            compute_active_next = 1'b1;
-            if ((fn_sel == DES_ENCRYPT) || (fn_sel == DES_DECRYPT)) begin
-                des_start_reg_next = 1'b1;
-            end else if ((fn_sel == CRC_GEN) || (fn_sel == SORT)) begin
+            end else if (mode_is_crc_sort) begin
                 crc_sort_start_reg_next = 1'b1;
             end
         end

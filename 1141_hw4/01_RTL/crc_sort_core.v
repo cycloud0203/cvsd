@@ -103,7 +103,7 @@ localparam IDLE = 2'd0;
 localparam COMPUTE = 2'd1;
 localparam DONE = 2'd2;
 
-reg [1:0] state, state_next;
+(* fsm_encoding = "auto" *) reg [1:0] state, state_next;
 reg [2:0] crc_reg, crc_reg_next;
 reg [7:0] bit_cnt, bit_cnt_next;
 reg [127:0] data_reg, data_reg_next;
@@ -203,7 +203,7 @@ localparam IDLE = 2'd0;
 localparam SORT = 2'd1;
 localparam DONE = 2'd2;
 
-reg [1:0] state, state_next;
+(* fsm_encoding = "auto" *) reg [1:0] state, state_next;
 reg [4:0] cycle_cnt, cycle_cnt_next;
 
 // Array to hold 16 bytes during sorting

@@ -19,12 +19,16 @@ localparam IDLE    = 2'd0;
 localparam COMPUTE = 2'd1;
 localparam DONE    = 2'd2;
 
-reg [1:0] state, state_next;
+(* fsm_encoding = "auto" *) reg [1:0] state, state_next;
 reg [3:0] round_cnt, round_cnt_next;  // 0-15 for 16 rounds
 reg [31:0] l_reg, l_reg_next;
 reg [31:0] r_reg, r_reg_next;
 reg [63:0] output_reg, output_reg_next;
 reg done_reg, done_reg_next;
+
+// Pre-computed subkeys storage (16 subkeys x 48 bits)
+reg [47:0] subkey_reg [0:15];
+reg [47:0] subkey_reg_next [0:15];
 
 // ========================================
 // Initial Permutation (IP)
@@ -518,18 +522,18 @@ function [767:0] generate_subkeys;  // 16 subkeys * 48 bits = 768 bits
 endfunction
 
 // ========================================
-// Subkey storage
+// Subkey computation (only when needed)
 // ========================================
-wire [767:0] all_subkeys;
-wire [47:0] subkey [0:15];
+wire [767:0] all_subkeys_wire;
+wire [47:0] subkey_wire [0:15];
 
-assign all_subkeys = generate_subkeys(key_in, decrypt);
+assign all_subkeys_wire = generate_subkeys(key_in, decrypt);
 
-// Extract individual subkeys
+// Extract individual subkeys from function output
 genvar i;
 generate
     for (i = 0; i < 16; i = i + 1) begin : subkey_extract
-        assign subkey[i] = all_subkeys[767 - i*48 -: 48];
+        assign subkey_wire[i] = all_subkeys_wire[767 - i*48 -: 48];
     end
 endgenerate
 
@@ -538,9 +542,10 @@ endgenerate
 // ========================================
 wire [63:0] ip_data;
 wire [31:0] f_out;
+integer j;
 
 assign ip_data = initial_permutation(data_in);
-assign f_out = f_function(r_reg, subkey[round_cnt]);
+assign f_out = f_function(r_reg, subkey_reg[round_cnt]);
 
 always @(*) begin
     // Default assignments
@@ -551,9 +556,18 @@ always @(*) begin
     output_reg_next = output_reg;
     done_reg_next = 1'b0;
     
+    // Default: keep subkeys
+    for (j = 0; j < 16; j = j + 1) begin
+        subkey_reg_next[j] = subkey_reg[j];
+    end
+    
     case (state)
         IDLE: begin
             if (start) begin
+                // Pre-compute and store all subkeys
+                for (j = 0; j < 16; j = j + 1) begin
+                    subkey_reg_next[j] = subkey_wire[j];
+                end
                 // Load initial values after IP
                 l_reg_next = ip_data[63:32];
                 r_reg_next = ip_data[31:0];
@@ -600,6 +614,7 @@ end
 // ========================================
 // Sequential Logic
 // ========================================
+integer k;
 always @(posedge clk or posedge rst) begin
     if (rst) begin
         state <= IDLE;
@@ -608,6 +623,9 @@ always @(posedge clk or posedge rst) begin
         r_reg <= 32'd0;
         output_reg <= 64'd0;
         done_reg <= 1'b0;
+        for (k = 0; k < 16; k = k + 1) begin
+            subkey_reg[k] <= 48'd0;
+        end
     end else if (en) begin
         state <= state_next;
         round_cnt <= round_cnt_next;
@@ -615,6 +633,9 @@ always @(posedge clk or posedge rst) begin
         r_reg <= r_reg_next;
         output_reg <= output_reg_next;
         done_reg <= done_reg_next;
+        for (k = 0; k < 16; k = k + 1) begin
+            subkey_reg[k] <= subkey_reg_next[k];
+        end
     end
 end
 
