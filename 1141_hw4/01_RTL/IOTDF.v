@@ -177,7 +177,7 @@ always @(*) begin
                 valid_reg_next = 1'b1;
                 
                 // no need to check i_en since i_en will be 1 in the next cycle when done is high   
-                next_state = LOAD;
+                next_state = IDLE;
                 busy_reg_next = 1'b0;
 
             end else begin
