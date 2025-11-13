@@ -3,6 +3,7 @@
 module crc_sort_core(
     input wire clk,
     input wire rst,
+    input wire en,
     input wire start,
     input wire [127:0] data_in,
     input wire [2:0] fn_sel,
@@ -16,11 +17,13 @@ localparam SORT    = 3'b100;
 
 // Internal signals for sort core
 wire sort_start;
+wire sort_en;
 wire [127:0] sort_data_out;
 wire sort_done;
 
 // Internal signals for CRC core
 wire crc_start;
+wire crc_en;
 wire [127:0] crc_data_out;
 wire crc_done;
 
@@ -28,12 +31,17 @@ wire crc_done;
 assign sort_start = (fn_sel == SORT) ? start : 1'b0;
 assign crc_start  = (fn_sel == CRC_GEN) ? start : 1'b0;
 
+// Enable signals based on fn_sel
+assign sort_en = (fn_sel == SORT) && en;
+assign crc_en  = (fn_sel == CRC_GEN) && en;
+
 // ========================================
 // Sort Core Instantiation
 // ========================================
 sort_core sort_inst (
     .clk(clk),
     .rst(rst),
+    .en(sort_en),
     .start(sort_start),
     .data_in(data_in),
     .data_out(sort_data_out),
@@ -46,6 +54,7 @@ sort_core sort_inst (
 crc_core crc_inst (
     .clk(clk),
     .rst(rst),
+    .en(crc_en),
     .start(crc_start),
     .data_in(data_in),
     .data_out(crc_data_out),
@@ -78,6 +87,7 @@ endmodule
 module crc_core(
     input wire clk,
     input wire rst,
+    input wire en,
     input wire start,
     input wire [127:0] data_in,
     output reg [127:0] data_out,
@@ -162,7 +172,7 @@ always @(posedge clk or posedge rst) begin
         crc_reg <= 3'b000;
         bit_cnt <= 8'd0;
         data_reg <= 128'd0;
-    end else begin
+    end else if (en) begin
         state <= state_next;
         crc_reg <= crc_reg_next;
         bit_cnt <= bit_cnt_next;
@@ -175,6 +185,7 @@ endmodule
 module sort_core(
     input wire clk,
     input wire rst,
+    input wire en,
     input wire start,
     input wire [127:0] data_in,
     output reg [127:0] data_out,
@@ -417,7 +428,7 @@ always @(posedge clk or posedge rst) begin
         for (i = 0; i < 16; i = i + 1) begin
             array[i] <= 8'd0;
         end
-    end else begin
+    end else if (en) begin
         state <= state_next;
         cycle_cnt <= cycle_cnt_next;
         for (i = 0; i < 16; i = i + 1) begin

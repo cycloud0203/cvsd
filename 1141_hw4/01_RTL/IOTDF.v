@@ -62,6 +62,10 @@ wire         des_done;
 wire         mode_is_des;
 wire         mode_is_crc_sort;
 
+// Enable signals for clock gating
+wire         des_en;
+wire         crc_sort_en;
+
 assign compute_data   = (compute_sel == 1'b0) ? data_buf0 : data_buf1;
 assign des_data_in    = compute_data[63:0];
 assign des_key_in     = compute_data[127:64];
@@ -69,9 +73,14 @@ assign mode_is_des    = (fn_sel == DES_ENCRYPT) || (fn_sel == DES_DECRYPT);
 assign mode_is_crc_sort = (fn_sel == CRC_GEN) || (fn_sel == SORT);
 assign des_decrypt    = (fn_sel == DES_DECRYPT);
 
+// Enable cores only when they are selected by fn_sel
+assign des_en = mode_is_des;
+assign crc_sort_en = mode_is_crc_sort;
+
 des_core des_inst (
     .clk(clk),
     .rst(rst),
+    .en(des_en),
     .start(des_start_reg),
     .data_in(des_data_in),
     .key_in(des_key_in),
@@ -89,6 +98,7 @@ wire         crc_sort_done;
 crc_sort_core crc_sort_inst (
     .clk(clk),
     .rst(rst),
+    .en(crc_sort_en),
     .start(crc_sort_start_reg),
     .data_in(compute_data),
     .fn_sel(fn_sel),

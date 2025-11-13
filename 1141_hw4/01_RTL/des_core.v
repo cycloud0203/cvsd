@@ -3,6 +3,7 @@
 module des_core (
     input         clk,          // Clock
     input         rst,          // Reset
+    input         en,           // Enable signal for clock gating
     input         start,        // Start computation
     input  [63:0] data_in,      // 64-bit plaintext/ciphertext
     input  [63:0] key_in,       // 64-bit key
@@ -607,33 +608,13 @@ always @(posedge clk or posedge rst) begin
         r_reg <= 32'd0;
         output_reg <= 64'd0;
         done_reg <= 1'b0;
-    end else begin
+    end else if (en) begin
         state <= state_next;
         round_cnt <= round_cnt_next;
         l_reg <= l_reg_next;
         r_reg <= r_reg_next;
         output_reg <= output_reg_next;
         done_reg <= done_reg_next;
-        
-        // Debug:// Display L and R values for each round
-        if (state == COMPUTE) begin
-            //$display("Round %2d: L = %08h, R = %08h", round_cnt, l_reg, r_reg);
-        end
-        
-        if (state_next == DONE && state == COMPUTE) begin
-            //$display("Round 16: L = %08h, R = %08h (Final)", l_reg_next, r_reg_next);
-            //$display("After FP: Output = %016h", output_reg_next);
-        end
-        
-        if (state == IDLE && state_next == COMPUTE && start) begin
-            //$display("========================================");
-            //$display("DES Core Starting New Computation");
-            //$display("Data: %016h", data_in);
-            //$display("Key:  %016h", key_in);
-            //$display("Mode: %s", decrypt ? "Decrypt" : "Encrypt");
-            //$display("After IP: L0 = %08h, R0 = %08h", l_reg_next, r_reg_next);
-            //$display("========================================");
-        end
     end
 end
 
