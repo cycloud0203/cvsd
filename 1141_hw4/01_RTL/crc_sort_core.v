@@ -202,34 +202,6 @@ reg [7:0] array_next [0:15];
 integer i;
 
 // ========================================
-// Comparison and Swap Function
-// ========================================
-task compare_and_swap;
-    input integer idx1;
-    input integer idx2;
-    input ascending; // 0 for descending, 1 for ascending
-    begin
-        if (ascending) begin
-            if (array[idx1] > array[idx2]) begin
-                array_next[idx1] = array[idx2];
-                array_next[idx2] = array[idx1];
-            end else begin
-                array_next[idx1] = array[idx1];
-                array_next[idx2] = array[idx2];
-            end
-        end else begin
-            if (array[idx1] < array[idx2]) begin
-                array_next[idx1] = array[idx2];
-                array_next[idx2] = array[idx1];
-            end else begin
-                array_next[idx1] = array[idx1];
-                array_next[idx2] = array[idx2];
-            end
-        end
-    end
-endtask
-
-// ========================================
 // Combinational Logic - FSM and Sorting
 // ========================================
 always @(*) begin
@@ -277,14 +249,70 @@ always @(*) begin
             case (cycle_cnt)
                 // Even-indexed comparisons (even cycles)
                 5'd0, 5'd2, 5'd4, 5'd6, 5'd8, 5'd10, 5'd12, 5'd14, 5'd16: begin
-                    compare_and_swap(0, 1, 0);
-                    compare_and_swap(2, 3, 0);
-                    compare_and_swap(4, 5, 0);
-                    compare_and_swap(6, 7, 0);
-                    compare_and_swap(8, 9, 0);
-                    compare_and_swap(10, 11, 0);
-                    compare_and_swap(12, 13, 0);
-                    compare_and_swap(14, 15, 0);
+                    // Compare and swap (0, 1) - descending order
+                    if (array[0] < array[1]) begin
+                        array_next[0] = array[1];
+                        array_next[1] = array[0];
+                    end else begin
+                        array_next[0] = array[0];
+                        array_next[1] = array[1];
+                    end
+                    // Compare and swap (2, 3) - descending order
+                    if (array[2] < array[3]) begin
+                        array_next[2] = array[3];
+                        array_next[3] = array[2];
+                    end else begin
+                        array_next[2] = array[2];
+                        array_next[3] = array[3];
+                    end
+                    // Compare and swap (4, 5) - descending order
+                    if (array[4] < array[5]) begin
+                        array_next[4] = array[5];
+                        array_next[5] = array[4];
+                    end else begin
+                        array_next[4] = array[4];
+                        array_next[5] = array[5];
+                    end
+                    // Compare and swap (6, 7) - descending order
+                    if (array[6] < array[7]) begin
+                        array_next[6] = array[7];
+                        array_next[7] = array[6];
+                    end else begin
+                        array_next[6] = array[6];
+                        array_next[7] = array[7];
+                    end
+                    // Compare and swap (8, 9) - descending order
+                    if (array[8] < array[9]) begin
+                        array_next[8] = array[9];
+                        array_next[9] = array[8];
+                    end else begin
+                        array_next[8] = array[8];
+                        array_next[9] = array[9];
+                    end
+                    // Compare and swap (10, 11) - descending order
+                    if (array[10] < array[11]) begin
+                        array_next[10] = array[11];
+                        array_next[11] = array[10];
+                    end else begin
+                        array_next[10] = array[10];
+                        array_next[11] = array[11];
+                    end
+                    // Compare and swap (12, 13) - descending order
+                    if (array[12] < array[13]) begin
+                        array_next[12] = array[13];
+                        array_next[13] = array[12];
+                    end else begin
+                        array_next[12] = array[12];
+                        array_next[13] = array[13];
+                    end
+                    // Compare and swap (14, 15) - descending order
+                    if (array[14] < array[15]) begin
+                        array_next[14] = array[15];
+                        array_next[15] = array[14];
+                    end else begin
+                        array_next[14] = array[14];
+                        array_next[15] = array[15];
+                    end
                     cycle_cnt_next = cycle_cnt + 1;
                     if (cycle_cnt == 5'd16) begin
                         state_next = DONE;
@@ -293,13 +321,62 @@ always @(*) begin
                 
                 // Odd-indexed comparisons (odd cycles)
                 5'd1, 5'd3, 5'd5, 5'd7, 5'd9, 5'd11, 5'd13, 5'd15: begin
-                    compare_and_swap(1, 2, 0);
-                    compare_and_swap(3, 4, 0);
-                    compare_and_swap(5, 6, 0);
-                    compare_and_swap(7, 8, 0);
-                    compare_and_swap(9, 10, 0);
-                    compare_and_swap(11, 12, 0);
-                    compare_and_swap(13, 14, 0);
+                    // Compare and swap (1, 2) - descending order
+                    if (array[1] < array[2]) begin
+                        array_next[1] = array[2];
+                        array_next[2] = array[1];
+                    end else begin
+                        array_next[1] = array[1];
+                        array_next[2] = array[2];
+                    end
+                    // Compare and swap (3, 4) - descending order
+                    if (array[3] < array[4]) begin
+                        array_next[3] = array[4];
+                        array_next[4] = array[3];
+                    end else begin
+                        array_next[3] = array[3];
+                        array_next[4] = array[4];
+                    end
+                    // Compare and swap (5, 6) - descending order
+                    if (array[5] < array[6]) begin
+                        array_next[5] = array[6];
+                        array_next[6] = array[5];
+                    end else begin
+                        array_next[5] = array[5];
+                        array_next[6] = array[6];
+                    end
+                    // Compare and swap (7, 8) - descending order
+                    if (array[7] < array[8]) begin
+                        array_next[7] = array[8];
+                        array_next[8] = array[7];
+                    end else begin
+                        array_next[7] = array[7];
+                        array_next[8] = array[8];
+                    end
+                    // Compare and swap (9, 10) - descending order
+                    if (array[9] < array[10]) begin
+                        array_next[9] = array[10];
+                        array_next[10] = array[9];
+                    end else begin
+                        array_next[9] = array[9];
+                        array_next[10] = array[10];
+                    end
+                    // Compare and swap (11, 12) - descending order
+                    if (array[11] < array[12]) begin
+                        array_next[11] = array[12];
+                        array_next[12] = array[11];
+                    end else begin
+                        array_next[11] = array[11];
+                        array_next[12] = array[12];
+                    end
+                    // Compare and swap (13, 14) - descending order
+                    if (array[13] < array[14]) begin
+                        array_next[13] = array[14];
+                        array_next[14] = array[13];
+                    end else begin
+                        array_next[13] = array[13];
+                        array_next[14] = array[14];
+                    end
                     cycle_cnt_next = cycle_cnt + 1;
                 end
                 

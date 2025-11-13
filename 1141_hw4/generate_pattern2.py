@@ -14,7 +14,7 @@ def generate_random_128bit_hex():
     hex_string = ''.join(f'{byte:02X}' for byte in random_bytes)
     return hex_string
 
-def generate_pattern2(num_patterns=65, output_dir='00_TESTBED/pattern2_data'):
+def generate_pattern2(num_patterns=64, output_dir='00_TESTBED/pattern2_data'):
     """
     Generate pattern2.dat file with random 128-bit hex numbers.
     
