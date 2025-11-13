@@ -176,18 +176,10 @@ always @(*) begin
                 end
                 valid_reg_next = 1'b1;
                 
-                // Check if we should load next data or go to IDLE
-                if (in_en) begin
-                    // Start loading next block immediately
-                    load_cnt_next = 4'd1;
-                    data_buf_next[7:0] = iot_in;
-                    next_state = LOAD;
-                    busy_reg_next = 1'b0;  // Not busy for one cycle
-                end else begin
-                    // No more input, go to IDLE
-                    next_state = IDLE;
-                    busy_reg_next = 1'b0;
-                end
+                // no need to check i_en since i_en will be 1 in the next cycle when done is high   
+                next_state = LOAD;
+                busy_reg_next = 1'b0;
+
             end else begin
                 // Still computing
                 next_state = COMPUTE;
