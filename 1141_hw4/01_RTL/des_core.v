@@ -25,15 +25,15 @@ reg [31:0] l_reg, l_reg_next;
 reg [31:0] r_reg, r_reg_next;
 reg [63:0] output_reg, output_reg_next;
 reg done_reg, done_reg_next;
-
-// Pre-computed subkeys storage (16 subkeys x 48 bits)
-reg [47:0] subkey_reg [0:15];
-reg [47:0] subkey_reg_next [0:15];
+reg [27:0] c_reg, c_reg_next;
+reg [27:0] d_reg, d_reg_next;
+reg [47:0] current_subkey_reg, current_subkey_next;
+reg decrypt_reg, decrypt_reg_next;
 
 // ========================================
 // Initial Permutation (IP)
 // ========================================
-function [63:0] initial_permutation;
+function automatic [63:0] initial_permutation;
     input [63:0] data;
     begin
         // DES bit 1-64 maps to Verilog bit 63-0
@@ -53,7 +53,7 @@ endfunction
 // ========================================
 // Final Permutation (FP) - Inverse of IP
 // ========================================
-function [63:0] final_permutation;
+function automatic [63:0] final_permutation;
     input [63:0] data;
     begin
         // DES bit 1-64 maps to Verilog bit 63-0
@@ -73,7 +73,7 @@ endfunction
 // ========================================
 // Permuted Choice 1 (PC1) - Key schedule
 // ========================================
-function [55:0] pc1;
+function automatic [55:0] pc1;
     input [63:0] key;
     begin
         // DES bit 1-64 maps to Verilog bit 63-0
@@ -94,7 +94,7 @@ endfunction
 // ========================================
 // Permuted Choice 2 (PC2) - Subkey generation
 // ========================================
-function [47:0] pc2;
+function automatic [47:0] pc2;
     input [55:0] key;
     begin
         // PC2 selects 48 bits from 56-bit key
@@ -112,9 +112,65 @@ function [47:0] pc2;
 endfunction
 
 // ========================================
+// Key Schedule Helpers
+// ========================================
+function automatic [27:0] rotate_left28;
+    input [27:0] value;
+    input [1:0] amount;
+    begin
+        case (amount)
+            2'd1: rotate_left28 = {value[26:0], value[27]};
+            2'd2: rotate_left28 = {value[25:0], value[27:26]};
+            default: rotate_left28 = value;
+        endcase
+    end
+endfunction
+
+function automatic [27:0] rotate_right28;
+    input [27:0] value;
+    input [1:0] amount;
+    begin
+        case (amount)
+            2'd1: rotate_right28 = {value[0], value[27:1]};
+            2'd2: rotate_right28 = {value[1:0], value[27:2]};
+            default: rotate_right28 = value;
+        endcase
+    end
+endfunction
+
+function automatic [1:0] shift_amount;
+    input [3:0] round_index;
+    begin
+        case (round_index)
+            4'd0,
+            4'd1,
+            4'd8,
+            4'd15: shift_amount = 2'd1;
+            default: shift_amount = 2'd2;
+        endcase
+    end
+endfunction
+
+function automatic [55:0] compute_cd_after_16_shifts;
+    input [55:0] cd_in;
+    reg [27:0] c_tmp;
+    reg [27:0] d_tmp;
+    integer idx;
+    begin
+        c_tmp = cd_in[55:28];
+        d_tmp = cd_in[27:0];
+        for (idx = 0; idx < 16; idx = idx + 1) begin
+            c_tmp = rotate_left28(c_tmp, shift_amount(idx[3:0]));
+            d_tmp = rotate_left28(d_tmp, shift_amount(idx[3:0]));
+        end
+        compute_cd_after_16_shifts = {c_tmp, d_tmp};
+    end
+endfunction
+
+// ========================================
 // Expansion (E) - Expand 32 bits to 48 bits
 // ========================================
-function [47:0] expansion;
+function automatic [47:0] expansion;
     input [31:0] data;
     begin
         // DES bit 1-32 maps to Verilog bit 31-0
@@ -134,7 +190,7 @@ endfunction
 // ========================================
 // S-Boxes (8 S-boxes, each 6-bit input to 4-bit output)
 // ========================================
-function [3:0] sbox1;
+function automatic [3:0] sbox1;
     input [5:0] data;
     reg [1:0] row;
     reg [3:0] col;
@@ -162,7 +218,7 @@ function [3:0] sbox1;
     end
 endfunction
 
-function [3:0] sbox2;
+function automatic [3:0] sbox2;
     input [5:0] data;
     reg [1:0] row;
     reg [3:0] col;
@@ -190,7 +246,7 @@ function [3:0] sbox2;
     end
 endfunction
 
-function [3:0] sbox3;
+function automatic [3:0] sbox3;
     input [5:0] data;
     reg [1:0] row;
     reg [3:0] col;
@@ -218,7 +274,7 @@ function [3:0] sbox3;
     end
 endfunction
 
-function [3:0] sbox4;
+function automatic [3:0] sbox4;
     input [5:0] data;
     reg [1:0] row;
     reg [3:0] col;
@@ -246,7 +302,7 @@ function [3:0] sbox4;
     end
 endfunction
 
-function [3:0] sbox5;
+function automatic [3:0] sbox5;
     input [5:0] data;
     reg [1:0] row;
     reg [3:0] col;
@@ -274,7 +330,7 @@ function [3:0] sbox5;
     end
 endfunction
 
-function [3:0] sbox6;
+function automatic [3:0] sbox6;
     input [5:0] data;
     reg [1:0] row;
     reg [3:0] col;
@@ -302,7 +358,7 @@ function [3:0] sbox6;
     end
 endfunction
 
-function [3:0] sbox7;
+function automatic [3:0] sbox7;
     input [5:0] data;
     reg [1:0] row;
     reg [3:0] col;
@@ -330,7 +386,7 @@ function [3:0] sbox7;
     end
 endfunction
 
-function [3:0] sbox8;
+function automatic [3:0] sbox8;
     input [5:0] data;
     reg [1:0] row;
     reg [3:0] col;
@@ -361,7 +417,7 @@ endfunction
 // ========================================
 // P-Box Permutation (after S-boxes)
 // ========================================
-function [31:0] pbox;
+function automatic [31:0] pbox;
     input [31:0] data;
     begin
         // DES bit 1-32 maps to Verilog bit 31-0
@@ -377,7 +433,7 @@ endfunction
 // ========================================
 // F-function (Feistel function)
 // ========================================
-function [31:0] f_function;
+function automatic [31:0] f_function;
     input [31:0] r;
     input [47:0] subkey;
     reg [47:0] expanded;
@@ -408,144 +464,26 @@ function [31:0] f_function;
 endfunction
 
 // ========================================
-// Key Schedule - Generate all 16 subkeys
+// Key Schedule Seeds
 // ========================================
-function [767:0] generate_subkeys;  // 16 subkeys * 48 bits = 768 bits
-    input [63:0] key;
-    input decrypt_mode;
-    reg [27:0] c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16;
-    reg [27:0] d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15, d16;
-    reg [55:0] cd;
-    reg [47:0] k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, k13, k14, k15;
-    begin
-        // PC1
-        cd = pc1(key);
-        c0 = cd[55:28];
-        d0 = cd[27:0];
-        
-        // Generate 16 subkeys with explicit shifts
-        // Shift schedule: rounds 1,2,9,16 shift by 1, others by 2
-        
-        // Round 1: shift by 1
-        c1 = {c0[26:0], c0[27]};
-        d1 = {d0[26:0], d0[27]};
-        k0 = pc2({c1, d1});
-        
-        // Round 2: shift by 1
-        c2 = {c1[26:0], c1[27]};
-        d2 = {d1[26:0], d1[27]};
-        k1 = pc2({c2, d2});
-        
-        // Round 3: shift by 2
-        c3 = {c2[25:0], c2[27:26]};
-        d3 = {d2[25:0], d2[27:26]};
-        k2 = pc2({c3, d3});
-        
-        // Round 4: shift by 2
-        c4 = {c3[25:0], c3[27:26]};
-        d4 = {d3[25:0], d3[27:26]};
-        k3 = pc2({c4, d4});
-        
-        // Round 5: shift by 2
-        c5 = {c4[25:0], c4[27:26]};
-        d5 = {d4[25:0], d4[27:26]};
-        k4 = pc2({c5, d5});
-        
-        // Round 6: shift by 2
-        c6 = {c5[25:0], c5[27:26]};
-        d6 = {d5[25:0], d5[27:26]};
-        k5 = pc2({c6, d6});
-        
-        // Round 7: shift by 2
-        c7 = {c6[25:0], c6[27:26]};
-        d7 = {d6[25:0], d6[27:26]};
-        k6 = pc2({c7, d7});
-        
-        // Round 8: shift by 2
-        c8 = {c7[25:0], c7[27:26]};
-        d8 = {d7[25:0], d7[27:26]};
-        k7 = pc2({c8, d8});
-        
-        // Round 9: shift by 1
-        c9 = {c8[26:0], c8[27]};
-        d9 = {d8[26:0], d8[27]};
-        k8 = pc2({c9, d9});
-        
-        // Round 10: shift by 2
-        c10 = {c9[25:0], c9[27:26]};
-        d10 = {d9[25:0], d9[27:26]};
-        k9 = pc2({c10, d10});
-        
-        // Round 11: shift by 2
-        c11 = {c10[25:0], c10[27:26]};
-        d11 = {d10[25:0], d10[27:26]};
-        k10 = pc2({c11, d11});
-        
-        // Round 12: shift by 2
-        c12 = {c11[25:0], c11[27:26]};
-        d12 = {d11[25:0], d11[27:26]};
-        k11 = pc2({c12, d12});
-        
-        // Round 13: shift by 2
-        c13 = {c12[25:0], c12[27:26]};
-        d13 = {d12[25:0], d12[27:26]};
-        k12 = pc2({c13, d13});
-        
-        // Round 14: shift by 2
-        c14 = {c13[25:0], c13[27:26]};
-        d14 = {d13[25:0], d13[27:26]};
-        k13 = pc2({c14, d14});
-        
-        // Round 15: shift by 2
-        c15 = {c14[25:0], c14[27:26]};
-        d15 = {d14[25:0], d14[27:26]};
-        k14 = pc2({c15, d15});
-        
-        // Round 16: shift by 1
-        c16 = {c15[26:0], c15[27]};
-        d16 = {d15[26:0], d15[27]};
-        k15 = pc2({c16, d16});
-        
-        // Pack subkeys (encryption: forward order, decryption: reverse order)
-        if (decrypt_mode) begin
-            generate_subkeys = {
-                k15, k14, k13, k12, k11, k10, k9, k8,
-                k7, k6, k5, k4, k3, k2, k1, k0
-            };
-        end else begin
-            generate_subkeys = {
-                k0, k1, k2, k3, k4, k5, k6, k7,
-                k8, k9, k10, k11, k12, k13, k14, k15
-            };
-        end
-    end
-endfunction
+wire [55:0] pc1_key;
+wire [55:0] decrypt_cd_seed;
+wire [27:0] c_seed_wire;
+wire [27:0] d_seed_wire;
 
-// ========================================
-// Subkey computation (only when needed)
-// ========================================
-wire [767:0] all_subkeys_wire;
-wire [47:0] subkey_wire [0:15];
-
-assign all_subkeys_wire = generate_subkeys(key_in, decrypt);
-
-// Extract individual subkeys from function output
-genvar i;
-generate
-    for (i = 0; i < 16; i = i + 1) begin : subkey_extract
-        assign subkey_wire[i] = all_subkeys_wire[767 - i*48 -: 48];
-    end
-endgenerate
+assign pc1_key = pc1(key_in);
+assign decrypt_cd_seed = compute_cd_after_16_shifts(pc1_key);
+assign c_seed_wire = pc1_key[55:28];
+assign d_seed_wire = pc1_key[27:0];
 
 // ========================================
 // Combinational Logic - FSM and Datapath
 // ========================================
 wire [63:0] ip_data;
 wire [31:0] f_out;
-integer j;
 
 assign ip_data = initial_permutation(data_in);
-assign f_out = f_function(r_reg, subkey_reg[round_cnt]);
+assign f_out = f_function(r_reg, current_subkey_reg);
 
 always @(*) begin
     // Default assignments
@@ -555,23 +493,26 @@ always @(*) begin
     r_reg_next = r_reg;
     output_reg_next = output_reg;
     done_reg_next = 1'b0;
-    
-    // Default: keep subkeys
-    for (j = 0; j < 16; j = j + 1) begin
-        subkey_reg_next[j] = subkey_reg[j];
-    end
+    c_reg_next = c_reg;
+    d_reg_next = d_reg;
+    current_subkey_next = current_subkey_reg;
+    decrypt_reg_next = decrypt_reg;
     
     case (state)
         IDLE: begin
             if (start) begin
-                // Pre-compute and store all subkeys
-                for (j = 0; j < 16; j = j + 1) begin
-                    subkey_reg_next[j] = subkey_wire[j];
-                end
-                // Load initial values after IP
+                decrypt_reg_next = decrypt;
                 l_reg_next = ip_data[63:32];
                 r_reg_next = ip_data[31:0];
                 round_cnt_next = 4'd0;
+                if (decrypt) begin
+                    c_reg_next = decrypt_cd_seed[55:28];
+                    d_reg_next = decrypt_cd_seed[27:0];
+                end else begin
+                    c_reg_next = rotate_left28(c_seed_wire, shift_amount(4'd0));
+                    d_reg_next = rotate_left28(d_seed_wire, shift_amount(4'd0));
+                end
+                current_subkey_next = pc2({c_reg_next, d_reg_next});
                 state_next = COMPUTE;
             end
         end
@@ -582,7 +523,14 @@ always @(*) begin
                 l_reg_next = r_reg;
                 r_reg_next = l_reg ^ f_out;
                 round_cnt_next = round_cnt + 4'd1;
-                state_next = COMPUTE;
+                if (!decrypt_reg) begin
+                    c_reg_next = rotate_left28(c_reg, shift_amount(round_cnt + 4'd1));
+                    d_reg_next = rotate_left28(d_reg, shift_amount(round_cnt + 4'd1));
+                end else begin
+                    c_reg_next = rotate_right28(c_reg, shift_amount(4'd15 - round_cnt));
+                    d_reg_next = rotate_right28(d_reg, shift_amount(4'd15 - round_cnt));
+                end
+                current_subkey_next = pc2({c_reg_next, d_reg_next});
             end else begin
                 // Last round (round 15): perform round and prepare output
                 l_reg_next = r_reg;
@@ -598,9 +546,18 @@ always @(*) begin
             
             // Check if starting new computation
             if (start) begin
+                decrypt_reg_next = decrypt;
                 l_reg_next = ip_data[63:32];
                 r_reg_next = ip_data[31:0];
                 round_cnt_next = 4'd0;
+                if (decrypt) begin
+                    c_reg_next = decrypt_cd_seed[55:28];
+                    d_reg_next = decrypt_cd_seed[27:0];
+                end else begin
+                    c_reg_next = rotate_left28(c_seed_wire, shift_amount(4'd0));
+                    d_reg_next = rotate_left28(d_seed_wire, shift_amount(4'd0));
+                end
+                current_subkey_next = pc2({c_reg_next, d_reg_next});
                 state_next = COMPUTE;
             end else begin
                 state_next = IDLE;
@@ -614,7 +571,6 @@ end
 // ========================================
 // Sequential Logic
 // ========================================
-integer k;
 always @(posedge clk or posedge rst) begin
     if (rst) begin
         state <= IDLE;
@@ -623,9 +579,10 @@ always @(posedge clk or posedge rst) begin
         r_reg <= 32'd0;
         output_reg <= 64'd0;
         done_reg <= 1'b0;
-        for (k = 0; k < 16; k = k + 1) begin
-            subkey_reg[k] <= 48'd0;
-        end
+        c_reg <= 28'd0;
+        d_reg <= 28'd0;
+        current_subkey_reg <= 48'd0;
+        decrypt_reg <= 1'b0;
     end else if (en) begin
         state <= state_next;
         round_cnt <= round_cnt_next;
@@ -633,9 +590,10 @@ always @(posedge clk or posedge rst) begin
         r_reg <= r_reg_next;
         output_reg <= output_reg_next;
         done_reg <= done_reg_next;
-        for (k = 0; k < 16; k = k + 1) begin
-            subkey_reg[k] <= subkey_reg_next[k];
-        end
+        c_reg <= c_reg_next;
+        d_reg <= d_reg_next;
+        current_subkey_reg <= current_subkey_next;
+        decrypt_reg <= decrypt_reg_next;
     end
 end
 

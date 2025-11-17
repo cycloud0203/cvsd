@@ -27,11 +27,9 @@ wire crc_en;
 wire [127:0] crc_data_out;
 wire crc_done;
 
-// Module selection
+// Module selection and enable
 assign sort_start = (fn_sel == SORT) ? start : 1'b0;
 assign crc_start  = (fn_sel == CRC_GEN) ? start : 1'b0;
-
-// Enable signals based on fn_sel
 assign sort_en = (fn_sel == SORT) && en;
 assign crc_en  = (fn_sel == CRC_GEN) && en;
 
@@ -98,6 +96,24 @@ module crc_core(
 // Polynomial representation: bit 3 is implicit (x^3), so we use bits [2:0] = 101
 localparam [2:0] CRC_POLY = 3'b101;  // x^2 + 1
 
+function automatic [2:0] crc_update_byte;
+    input [2:0] crc_in;
+    input [7:0] data_byte;
+    integer idx;
+    reg [2:0] crc_tmp;
+    begin
+        crc_tmp = crc_in;
+        for (idx = 0; idx < 8; idx = idx + 1) begin
+            if (crc_tmp[2] ^ data_byte[7 - idx]) begin
+                crc_tmp = {crc_tmp[1:0], 1'b0} ^ CRC_POLY;
+            end else begin
+                crc_tmp = {crc_tmp[1:0], 1'b0};
+            end
+        end
+        crc_update_byte = crc_tmp;
+    end
+endfunction
+
 // State machine
 localparam IDLE = 2'd0;
 localparam COMPUTE = 2'd1;
@@ -105,8 +121,11 @@ localparam DONE = 2'd2;
 
 (* fsm_encoding = "auto" *) reg [1:0] state, state_next;
 reg [2:0] crc_reg, crc_reg_next;
-reg [7:0] bit_cnt, bit_cnt_next;
+reg [4:0] byte_cnt, byte_cnt_next;
 reg [127:0] data_reg, data_reg_next;
+wire [7:0] current_byte;
+
+assign current_byte = data_reg[127:120];
 
 // ========================================
 // Combinational Logic
@@ -114,7 +133,7 @@ reg [127:0] data_reg, data_reg_next;
 always @(*) begin
     state_next = state;
     crc_reg_next = crc_reg;
-    bit_cnt_next = bit_cnt;
+    byte_cnt_next = byte_cnt;
     data_reg_next = data_reg;
     done = 1'b0;
     
@@ -123,22 +142,17 @@ always @(*) begin
             if (start) begin
                 state_next = COMPUTE;
                 crc_reg_next = 3'b000; // Initial CRC value (all zeros)
-                bit_cnt_next = 8'd0;
+                byte_cnt_next = 5'd0;
                 data_reg_next = data_in;
             end
         end
         
         COMPUTE: begin
-            if (bit_cnt < 128) begin
-                // Process one bit at a time
-                // Shift in the next data bit and XOR with polynomial if MSB is 1
-                if (crc_reg[2] ^ data_reg[127]) begin
-                    crc_reg_next = {crc_reg[1:0], 1'b0} ^ CRC_POLY;
-                end else begin
-                    crc_reg_next = {crc_reg[1:0], 1'b0};
-                end
-                data_reg_next = {data_reg[126:0], 1'b0};
-                bit_cnt_next = bit_cnt + 1;
+            if (byte_cnt < 5'd16) begin
+                // Process one byte per cycle
+                crc_reg_next = crc_update_byte(crc_reg, current_byte);
+                data_reg_next = {data_reg[119:0], 8'd0};
+                byte_cnt_next = byte_cnt + 5'd1;
             end else begin
                 state_next = DONE;
             end
@@ -170,12 +184,12 @@ always @(posedge clk or posedge rst) begin
     if (rst) begin
         state <= IDLE;
         crc_reg <= 3'b000;
-        bit_cnt <= 8'd0;
+        byte_cnt <= 5'd0;
         data_reg <= 128'd0;
     end else if (en) begin
         state <= state_next;
         crc_reg <= crc_reg_next;
-        bit_cnt <= bit_cnt_next;
+        byte_cnt <= byte_cnt_next;
         data_reg <= data_reg_next;
     end
 end
@@ -207,8 +221,8 @@ localparam DONE = 2'd2;
 reg [4:0] cycle_cnt, cycle_cnt_next;
 
 // Array to hold 16 bytes during sorting
-reg [7:0] array [0:15];
-reg [7:0] array_next [0:15];
+reg [7:0] sort_array [0:15];
+reg [7:0] sort_array_next [0:15];
 
 integer i;
 
@@ -223,7 +237,7 @@ always @(*) begin
     
     // Copy array by default
     for (i = 0; i < 16; i = i + 1) begin
-        array_next[i] = array[i];
+        sort_array_next[i] = sort_array[i];
     end
     
     case (state)
@@ -233,22 +247,22 @@ always @(*) begin
                 cycle_cnt_next = 5'd0;
                 
                 // Load input data into array
-                array_next[0]  = data_in[7:0];
-                array_next[1]  = data_in[15:8];
-                array_next[2]  = data_in[23:16];
-                array_next[3]  = data_in[31:24];
-                array_next[4]  = data_in[39:32];
-                array_next[5]  = data_in[47:40];
-                array_next[6]  = data_in[55:48];
-                array_next[7]  = data_in[63:56];
-                array_next[8]  = data_in[71:64];
-                array_next[9]  = data_in[79:72];
-                array_next[10] = data_in[87:80];
-                array_next[11] = data_in[95:88];
-                array_next[12] = data_in[103:96];
-                array_next[13] = data_in[111:104];
-                array_next[14] = data_in[119:112];
-                array_next[15] = data_in[127:120];
+                sort_array_next[0]  = data_in[7:0];
+                sort_array_next[1]  = data_in[15:8];
+                sort_array_next[2]  = data_in[23:16];
+                sort_array_next[3]  = data_in[31:24];
+                sort_array_next[4]  = data_in[39:32];
+                sort_array_next[5]  = data_in[47:40];
+                sort_array_next[6]  = data_in[55:48];
+                sort_array_next[7]  = data_in[63:56];
+                sort_array_next[8]  = data_in[71:64];
+                sort_array_next[9]  = data_in[79:72];
+                sort_array_next[10] = data_in[87:80];
+                sort_array_next[11] = data_in[95:88];
+                sort_array_next[12] = data_in[103:96];
+                sort_array_next[13] = data_in[111:104];
+                sort_array_next[14] = data_in[119:112];
+                sort_array_next[15] = data_in[127:120];
             end
         end
         
@@ -261,68 +275,68 @@ always @(*) begin
                 // Even-indexed comparisons (even cycles)
                 5'd0, 5'd2, 5'd4, 5'd6, 5'd8, 5'd10, 5'd12, 5'd14, 5'd16: begin
                     // Compare and swap (0, 1) - descending order
-                    if (array[0] < array[1]) begin
-                        array_next[0] = array[1];
-                        array_next[1] = array[0];
+                    if (sort_array[0] < sort_array[1]) begin
+                        sort_array_next[0] = sort_array[1];
+                        sort_array_next[1] = sort_array[0];
                     end else begin
-                        array_next[0] = array[0];
-                        array_next[1] = array[1];
+                        sort_array_next[0] = sort_array[0];
+                        sort_array_next[1] = sort_array[1];
                     end
                     // Compare and swap (2, 3) - descending order
-                    if (array[2] < array[3]) begin
-                        array_next[2] = array[3];
-                        array_next[3] = array[2];
+                    if (sort_array[2] < sort_array[3]) begin
+                        sort_array_next[2] = sort_array[3];
+                        sort_array_next[3] = sort_array[2];
                     end else begin
-                        array_next[2] = array[2];
-                        array_next[3] = array[3];
+                        sort_array_next[2] = sort_array[2];
+                        sort_array_next[3] = sort_array[3];
                     end
                     // Compare and swap (4, 5) - descending order
-                    if (array[4] < array[5]) begin
-                        array_next[4] = array[5];
-                        array_next[5] = array[4];
+                    if (sort_array[4] < sort_array[5]) begin
+                        sort_array_next[4] = sort_array[5];
+                        sort_array_next[5] = sort_array[4];
                     end else begin
-                        array_next[4] = array[4];
-                        array_next[5] = array[5];
+                        sort_array_next[4] = sort_array[4];
+                        sort_array_next[5] = sort_array[5];
                     end
                     // Compare and swap (6, 7) - descending order
-                    if (array[6] < array[7]) begin
-                        array_next[6] = array[7];
-                        array_next[7] = array[6];
+                    if (sort_array[6] < sort_array[7]) begin
+                        sort_array_next[6] = sort_array[7];
+                        sort_array_next[7] = sort_array[6];
                     end else begin
-                        array_next[6] = array[6];
-                        array_next[7] = array[7];
+                        sort_array_next[6] = sort_array[6];
+                        sort_array_next[7] = sort_array[7];
                     end
                     // Compare and swap (8, 9) - descending order
-                    if (array[8] < array[9]) begin
-                        array_next[8] = array[9];
-                        array_next[9] = array[8];
+                    if (sort_array[8] < sort_array[9]) begin
+                        sort_array_next[8] = sort_array[9];
+                        sort_array_next[9] = sort_array[8];
                     end else begin
-                        array_next[8] = array[8];
-                        array_next[9] = array[9];
+                        sort_array_next[8] = sort_array[8];
+                        sort_array_next[9] = sort_array[9];
                     end
                     // Compare and swap (10, 11) - descending order
-                    if (array[10] < array[11]) begin
-                        array_next[10] = array[11];
-                        array_next[11] = array[10];
+                    if (sort_array[10] < sort_array[11]) begin
+                        sort_array_next[10] = sort_array[11];
+                        sort_array_next[11] = sort_array[10];
                     end else begin
-                        array_next[10] = array[10];
-                        array_next[11] = array[11];
+                        sort_array_next[10] = sort_array[10];
+                        sort_array_next[11] = sort_array[11];
                     end
                     // Compare and swap (12, 13) - descending order
-                    if (array[12] < array[13]) begin
-                        array_next[12] = array[13];
-                        array_next[13] = array[12];
+                    if (sort_array[12] < sort_array[13]) begin
+                        sort_array_next[12] = sort_array[13];
+                        sort_array_next[13] = sort_array[12];
                     end else begin
-                        array_next[12] = array[12];
-                        array_next[13] = array[13];
+                        sort_array_next[12] = sort_array[12];
+                        sort_array_next[13] = sort_array[13];
                     end
                     // Compare and swap (14, 15) - descending order
-                    if (array[14] < array[15]) begin
-                        array_next[14] = array[15];
-                        array_next[15] = array[14];
+                    if (sort_array[14] < sort_array[15]) begin
+                        sort_array_next[14] = sort_array[15];
+                        sort_array_next[15] = sort_array[14];
                     end else begin
-                        array_next[14] = array[14];
-                        array_next[15] = array[15];
+                        sort_array_next[14] = sort_array[14];
+                        sort_array_next[15] = sort_array[15];
                     end
                     cycle_cnt_next = cycle_cnt + 1;
                     if (cycle_cnt == 5'd16) begin
@@ -333,60 +347,60 @@ always @(*) begin
                 // Odd-indexed comparisons (odd cycles)
                 5'd1, 5'd3, 5'd5, 5'd7, 5'd9, 5'd11, 5'd13, 5'd15: begin
                     // Compare and swap (1, 2) - descending order
-                    if (array[1] < array[2]) begin
-                        array_next[1] = array[2];
-                        array_next[2] = array[1];
+                    if (sort_array[1] < sort_array[2]) begin
+                        sort_array_next[1] = sort_array[2];
+                        sort_array_next[2] = sort_array[1];
                     end else begin
-                        array_next[1] = array[1];
-                        array_next[2] = array[2];
+                        sort_array_next[1] = sort_array[1];
+                        sort_array_next[2] = sort_array[2];
                     end
                     // Compare and swap (3, 4) - descending order
-                    if (array[3] < array[4]) begin
-                        array_next[3] = array[4];
-                        array_next[4] = array[3];
+                    if (sort_array[3] < sort_array[4]) begin
+                        sort_array_next[3] = sort_array[4];
+                        sort_array_next[4] = sort_array[3];
                     end else begin
-                        array_next[3] = array[3];
-                        array_next[4] = array[4];
+                        sort_array_next[3] = sort_array[3];
+                        sort_array_next[4] = sort_array[4];
                     end
                     // Compare and swap (5, 6) - descending order
-                    if (array[5] < array[6]) begin
-                        array_next[5] = array[6];
-                        array_next[6] = array[5];
+                    if (sort_array[5] < sort_array[6]) begin
+                        sort_array_next[5] = sort_array[6];
+                        sort_array_next[6] = sort_array[5];
                     end else begin
-                        array_next[5] = array[5];
-                        array_next[6] = array[6];
+                        sort_array_next[5] = sort_array[5];
+                        sort_array_next[6] = sort_array[6];
                     end
                     // Compare and swap (7, 8) - descending order
-                    if (array[7] < array[8]) begin
-                        array_next[7] = array[8];
-                        array_next[8] = array[7];
+                    if (sort_array[7] < sort_array[8]) begin
+                        sort_array_next[7] = sort_array[8];
+                        sort_array_next[8] = sort_array[7];
                     end else begin
-                        array_next[7] = array[7];
-                        array_next[8] = array[8];
+                        sort_array_next[7] = sort_array[7];
+                        sort_array_next[8] = sort_array[8];
                     end
                     // Compare and swap (9, 10) - descending order
-                    if (array[9] < array[10]) begin
-                        array_next[9] = array[10];
-                        array_next[10] = array[9];
+                    if (sort_array[9] < sort_array[10]) begin
+                        sort_array_next[9] = sort_array[10];
+                        sort_array_next[10] = sort_array[9];
                     end else begin
-                        array_next[9] = array[9];
-                        array_next[10] = array[10];
+                        sort_array_next[9] = sort_array[9];
+                        sort_array_next[10] = sort_array[10];
                     end
                     // Compare and swap (11, 12) - descending order
-                    if (array[11] < array[12]) begin
-                        array_next[11] = array[12];
-                        array_next[12] = array[11];
+                    if (sort_array[11] < sort_array[12]) begin
+                        sort_array_next[11] = sort_array[12];
+                        sort_array_next[12] = sort_array[11];
                     end else begin
-                        array_next[11] = array[11];
-                        array_next[12] = array[12];
+                        sort_array_next[11] = sort_array[11];
+                        sort_array_next[12] = sort_array[12];
                     end
                     // Compare and swap (13, 14) - descending order
-                    if (array[13] < array[14]) begin
-                        array_next[13] = array[14];
-                        array_next[14] = array[13];
+                    if (sort_array[13] < sort_array[14]) begin
+                        sort_array_next[13] = sort_array[14];
+                        sort_array_next[14] = sort_array[13];
                     end else begin
-                        array_next[13] = array[13];
-                        array_next[14] = array[14];
+                        sort_array_next[13] = sort_array[13];
+                        sort_array_next[14] = sort_array[14];
                     end
                     cycle_cnt_next = cycle_cnt + 1;
                 end
@@ -412,10 +426,10 @@ end
 // Output Assignment  
 // ========================================
 always @(*) begin
-    data_out = {array[0],  array[1],  array[2],  array[3],
-                array[4],  array[5],  array[6],  array[7],
-                array[8],  array[9],  array[10], array[11],
-                array[12], array[13], array[14], array[15]};
+    data_out = {sort_array[0],  sort_array[1],  sort_array[2],  sort_array[3],
+                sort_array[4],  sort_array[5],  sort_array[6],  sort_array[7],
+                sort_array[8],  sort_array[9],  sort_array[10], sort_array[11],
+                sort_array[12], sort_array[13], sort_array[14], sort_array[15]};
 end
 
 // ========================================
@@ -426,13 +440,13 @@ always @(posedge clk or posedge rst) begin
         state <= IDLE;
         cycle_cnt <= 5'd0;
         for (i = 0; i < 16; i = i + 1) begin
-            array[i] <= 8'd0;
+            sort_array[i] <= 8'd0;
         end
     end else if (en) begin
         state <= state_next;
         cycle_cnt <= cycle_cnt_next;
         for (i = 0; i < 16; i = i + 1) begin
-            array[i] <= array_next[i];
+            sort_array[i] <= sort_array_next[i];
         end
     end
 end
